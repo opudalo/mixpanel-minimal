@@ -70,11 +70,16 @@ class MixpanelTrimmer {
     const prettifiedCode = fs.readFileSync(prettifiedPath, 'utf-8');
     console.log(chalk.gray(`Reading prettified file from disk: ${prettifiedPath}`));
 
-    // Parse and trim the prettified version
-    const trimmedCode = await this.processCode(prettifiedCode);
+    // PASS 1: Remove methods
+    console.log(chalk.blue('\n📍 Pass 1: Removing methods'));
+    const pass1Code = await this.processCode(prettifiedCode, { removeComments: false, pass: 1 });
+    await this.saveTrimmedFile(pass1Code, 1);
 
-    // Save trimmed file
-    await this.saveTrimmedFile(trimmedCode);
+    // PASS 2: Remove comments before removed methods
+    console.log(chalk.blue('\n📍 Pass 2: Removing comments before removed methods'));
+    // Re-parse the original to detect comments
+    const pass2Code = await this.processCode(prettifiedCode, { removeComments: true, pass: 2 });
+    await this.saveTrimmedFile(pass2Code, 2);
 
     // Generate summary
     this.printSummary();
@@ -269,7 +274,10 @@ class MixpanelTrimmer {
     return prettifiedPath;
   }
 
-  async processCode(code) {
+  async processCode(code, options = {}) {
+    const { removeComments = false, pass = 1 } = options;
+    const commentLinesToRemove = new Set(); // Track comment line numbers to remove
+
     try {
       const ast = parser.parse(code, {
         sourceType: 'script',
@@ -298,6 +306,17 @@ class MixpanelTrimmer {
               if (methodName && this.methodsToRemove.has(methodName)) {
                 const statement = path.getStatementParent();
                 if (statement && !nodesToRemove.includes(statement)) {
+                  // Track leading comments for removal if requested
+                  if (removeComments && statement.node.leadingComments) {
+                    statement.node.leadingComments.forEach(comment => {
+                      // Track by line number and content
+                      commentLinesToRemove.add(`${comment.loc.start.line}-${comment.value}`);
+                    });
+                    if (this.options.verbose) {
+                      console.log(chalk.gray(`  Marking ${statement.node.leadingComments.length} comment(s) for removal before: ${methodName}`));
+                    }
+                  }
+
                   nodesToRemove.push(statement);
                   this.removedMethods.add(methodName);
                   if (this.options.verbose) {
@@ -309,7 +328,7 @@ class MixpanelTrimmer {
           }
         },
 
-        // Remove object methods in object expressions
+        // Remove object methods ONLY in specific contexts (MixpanelPeople, exports, etc.)
         ObjectProperty: (path) => {
           const keyName = path.node.key?.name || path.node.key?.value;
 
@@ -318,10 +337,24 @@ class MixpanelTrimmer {
             if (path.node.value?.type === 'FunctionExpression' ||
                 path.node.value?.type === 'ArrowFunctionExpression' ||
                 path.node.method) {
-              path.remove();
-              this.removedMethods.add(keyName);
-              if (this.options.verbose) {
-                console.log(chalk.gray(`  Removing object method: ${keyName}`));
+
+              // Only remove if this is in a MixpanelPeople or similar public API object
+              // Check if parent is an object that looks like it's defining public API
+              const parent = path.parentPath;
+              if (parent && parent.node.type === 'ObjectExpression') {
+                // Check if this object is being assigned to something
+                const grandParent = parent.parentPath;
+                if (grandParent && grandParent.node.type === 'VariableDeclarator') {
+                  const varName = grandParent.node.id?.name;
+                  // Only remove if it's clearly a public API object
+                  if (varName && (varName.includes('People') || varName.includes('Group'))) {
+                    path.remove();
+                    this.removedMethods.add(keyName);
+                    if (this.options.verbose) {
+                      console.log(chalk.gray(`  Removing object method: ${keyName} from ${varName}`));
+                    }
+                  }
+                }
               }
             }
           }
@@ -331,10 +364,20 @@ class MixpanelTrimmer {
           const keyName = path.node.key?.name || path.node.key?.value;
 
           if (keyName && this.methodsToRemove.has(keyName)) {
-            path.remove();
-            this.removedMethods.add(keyName);
-            if (this.options.verbose) {
-              console.log(chalk.gray(`  Removing object method: ${keyName}`));
+            // Only remove if this is in a public API object context
+            const parent = path.parentPath;
+            if (parent && parent.node.type === 'ObjectExpression') {
+              const grandParent = parent.parentPath;
+              if (grandParent && grandParent.node.type === 'VariableDeclarator') {
+                const varName = grandParent.node.id?.name;
+                if (varName && (varName.includes('People') || varName.includes('Group'))) {
+                  path.remove();
+                  this.removedMethods.add(keyName);
+                  if (this.options.verbose) {
+                    console.log(chalk.gray(`  Removing object method: ${keyName} from ${varName}`));
+                  }
+                }
+              }
             }
           }
         }
@@ -353,14 +396,25 @@ class MixpanelTrimmer {
         }
       });
 
-      // Generate code with MAXIMUM compactness so Prettier makes all formatting decisions
+      // Generate code
       const output = generate(ast, {
         sourceMaps: false,
         comments: true,
-        shouldPrintComment: () => true,
-        compact: false, // Generate as compact as possible (single line)
+        shouldPrintComment: (commentValue) => {
+          // In Pass 2, filter out comments we marked for removal
+          if (removeComments) {
+            // Check all tracked comment signatures
+            for (const sig of commentLinesToRemove) {
+              if (sig.includes(commentValue)) {
+                return false; // Don't print this comment
+              }
+            }
+          }
+          return true;
+        },
+        compact: false,
         concise: false,
-        minified: false, // Keep readable identifiers
+        minified: false,
         retainLines: false,
         jsescOption: {
           minimal: true
@@ -374,22 +428,25 @@ class MixpanelTrimmer {
     }
   }
 
-  async saveTrimmedFile(code) {
+  async saveTrimmedFile(code, pass = 1) {
     if (this.options.dryRun) {
       console.log(chalk.yellow('\n🔍 DRY RUN MODE - No files will be modified'));
       this.trimmedSize = Buffer.byteLength(code, 'utf8');
       return;
     }
 
+    // Create output filename with pass number
+    const outputFile = this.options.outputFile.replace(/\.cjs\.js$/, `-${pass}.cjs.js`);
+
     // Ensure output directory exists
-    const outputDir = path.dirname(this.options.outputFile);
+    const outputDir = path.dirname(outputFile);
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
     // Add header comment
     const header = `/**
- * Mixpanel Minimal - Trimmed Version
+ * Mixpanel Minimal - Trimmed Version (Pass ${pass})
  * Generated: ${new Date().toISOString()}
  * Original size: ${this.formatSize(this.originalSize)}
  * Removed ${this.removedMethods.size} unused methods
@@ -404,22 +461,22 @@ class MixpanelTrimmer {
     const codeWithHeader = header + code;
 
     // Write raw trimmed file to disk first
-    console.log(chalk.gray('Writing raw trimmed file to disk...'));
-    fs.writeFileSync(this.options.outputFile, codeWithHeader);
+    console.log(chalk.gray(`Writing pass ${pass} to disk...`));
+    fs.writeFileSync(outputFile, codeWithHeader);
 
     // Now prettify using Prettier CLI (ensures 100% consistent formatting with prettified original)
-    console.log(chalk.gray('Prettifying trimmed file...'));
+    console.log(chalk.gray(`Prettifying pass ${pass} file...`));
     const { execSync } = require('child_process');
     try {
-      execSync(`npx prettier --write "${this.options.outputFile}"`, { stdio: 'pipe' });
-      const prettified = fs.readFileSync(this.options.outputFile, 'utf-8');
+      execSync(`npx prettier --write "${outputFile}"`, { stdio: 'pipe' });
+      const prettified = fs.readFileSync(outputFile, 'utf-8');
       this.trimmedSize = Buffer.byteLength(prettified, 'utf8');
-      console.log(chalk.green(`✓ Trimmed file saved to: ${this.options.outputFile}`));
+      console.log(chalk.green(`✓ Pass ${pass} saved to: ${outputFile}`));
     } catch (error) {
       console.log(chalk.yellow(`⚠️  Prettier CLI formatting failed: ${error.message}`));
       // Keep the unprettified version
       this.trimmedSize = Buffer.byteLength(codeWithHeader, 'utf8');
-      console.log(chalk.yellow(`✓ Trimmed file saved (unprettified) to: ${this.options.outputFile}`));
+      console.log(chalk.yellow(`✓ Pass ${pass} saved (unprettified) to: ${outputFile}`));
     }
   }
 

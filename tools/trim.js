@@ -82,14 +82,16 @@ class MixpanelTrimmer {
     const pass2Code = await this.processCode(pass1Code, { removeComments: true, pass: 2 });
     await this.saveTrimmedFile(pass2Code, 2);
 
-    // PASS 3: Remove unused private methods
-    console.log(chalk.blue('\n📍 Pass 3: Removing unused private methods'));
-    const pass3Code = await this.removeUnusedPrivateMethods(pass2Code);
+    // PASS 3: Remove unused private methods (recursive)
+    console.log(chalk.blue('\n📍 Pass 3: Removing unused private methods (recursive)'));
+    const recursivePass3 = await this.makePassRecursive('Pass 3', this.removeUnusedPrivateMethods.bind(this));
+    const pass3Code = await recursivePass3(pass2Code);
     await this.saveTrimmedFile(pass3Code, 3);
 
-    // PASS 4: Remove unused variables, functions, and write-only variables (recursively until fixed point)
+    // PASS 4: Remove unused variables, functions, and write-only variables (recursive)
     console.log(chalk.blue('\n📍 Pass 4: Removing unused variables, functions, and write-only variables (recursive)'));
-    const pass4Code = await this.removeUnusedAndWriteOnlyVariables(pass3Code);
+    const recursivePass4 = await this.makePassRecursive('Pass 4', this.removeUnusedAndWriteOnlyVariablesOnce.bind(this));
+    const pass4Code = await recursivePass4(pass3Code);
     await this.saveTrimmedFile(pass4Code, 4);
 
     // PASS 5: Remove all comments
@@ -99,34 +101,18 @@ class MixpanelTrimmer {
 
     // PASS 6: Remove unused constructor functions and standalone functions (recursive)
     console.log(chalk.blue('\n📍 Pass 6: Removing unused constructor functions (recursive)'));
-    let pass6Code = pass5Code;
-    let iteration = 0;
-
-    while (true) {
-      iteration++;
-      const result = await this.removeUnusedConstructors(pass6Code, iteration);
-      pass6Code = result.code;
-
+    const recursivePass6 = await this.makePassRecursive('Pass 6', async (code, iteration) => {
+      const result = await this.removeUnusedConstructors(code, iteration);
       console.log(chalk.gray(`  Iteration ${iteration}: Removed ${result.removedCount} items`));
-
-      // Stop when no more removals occur (fixed point reached)
-      if (result.removedCount === 0) {
-        console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
-        break;
-      }
-
-      // Safety check to prevent infinite loops
-      if (iteration > 10) {
-        console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
-        break;
-      }
-    }
-
+      return result.code;
+    });
+    const pass6Code = await recursivePass6(pass5Code);
     await this.saveTrimmedFile(pass6Code, 6);
 
     // PASS 7: Remove unused variables, functions, and write-only variables again (recursive cleanup after Pass 6)
     console.log(chalk.blue('\n📍 Pass 7: Removing unused variables, functions, and write-only variables (recursive cleanup)'));
-    const pass7Code = await this.removeUnusedAndWriteOnlyVariables(pass6Code);
+    const recursivePass7 = await this.makePassRecursive('Pass 7', this.removeUnusedAndWriteOnlyVariablesOnce.bind(this));
+    const pass7Code = await recursivePass7(pass6Code);
     await this.saveTrimmedFile(pass7Code, 7);
 
     // Generate summary
@@ -848,33 +834,43 @@ class MixpanelTrimmer {
     }
   }
 
-  async removeUnusedAndWriteOnlyVariables(code) {
-    let resultCode = code;
-    let iteration = 0;
+  // Generic helper to make any pass recursive by comparing code before/after
+  async makePassRecursive(passName, passFunction) {
+    return async (code) => {
+      let resultCode = code;
+      let iteration = 0;
 
-    while (true) {
-      iteration++;
-      const unusedResult = await this.removeUnusedVariablesAndFunctions(resultCode, iteration);
-      const writeOnlyResult = await this.removeWriteOnlyVariables(unusedResult.code, iteration);
-      resultCode = writeOnlyResult.code;
+      while (true) {
+        iteration++;
+        const previousCode = resultCode;
+        resultCode = await passFunction(resultCode, iteration);
 
-      const totalRemoved = unusedResult.removedCount + writeOnlyResult.removedCount;
-      console.log(chalk.gray(`  Iteration ${iteration}: Removed ${unusedResult.removedCount} unused + ${writeOnlyResult.removedCount} write-only = ${totalRemoved} total`));
+        // Compare code - if no change, we've reached fixed point
+        if (resultCode === previousCode) {
+          console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
+          break;
+        }
 
-      // Stop when no more removals occur (fixed point reached)
-      if (totalRemoved === 0) {
-        console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
-        break;
+        // Safety check to prevent infinite loops
+        if (iteration > 10) {
+          console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
+          break;
+        }
       }
 
-      // Safety check to prevent infinite loops
-      if (iteration > 10) {
-        console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
-        break;
-      }
-    }
+      return resultCode;
+    };
+  }
 
-    return resultCode;
+  // Single iteration of removing unused variables/functions and write-only variables
+  async removeUnusedAndWriteOnlyVariablesOnce(code, iteration = 1) {
+    const unusedResult = await this.removeUnusedVariablesAndFunctions(code, iteration);
+    const writeOnlyResult = await this.removeWriteOnlyVariables(unusedResult.code, iteration);
+
+    const totalRemoved = unusedResult.removedCount + writeOnlyResult.removedCount;
+    console.log(chalk.gray(`  Iteration ${iteration}: Removed ${unusedResult.removedCount} unused + ${writeOnlyResult.removedCount} write-only = ${totalRemoved} total`));
+
+    return writeOnlyResult.code;
   }
 
   async removeAllComments(code) {

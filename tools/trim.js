@@ -77,66 +77,35 @@ class MixpanelTrimmer {
     pass1Code = await this.modernizeUnderscore(pass1Code);
     await this.saveTrimmedFile(pass1Code, 1);
 
-    // PASS 2: Remove methods
-    console.log(chalk.blue('\n📍 Pass 2: Removing methods'));
-    const pass2Code = await this.processCode(pass1Code, { removeComments: false, pass: 2 });
+    // PASS 2: Remove methods and their comments
+    console.log(chalk.blue('\n📍 Pass 2: Removing methods and their comments'));
+    const pass2Code = await this.processCode(pass1Code, { removeComments: true, pass: 2 });
     await this.saveTrimmedFile(pass2Code, 2);
 
-    // PASS 3: Remove comments before removed methods
-    console.log(chalk.blue('\n📍 Pass 3: Removing comments before removed methods'));
-    // Re-parse Pass 1 to detect comments (includes _init cleanup)
-    const pass3Code = await this.processCode(pass1Code, { removeComments: true, pass: 3 });
+    // PASS 3: Remove unused private methods
+    console.log(chalk.blue('\n📍 Pass 3: Removing unused private methods'));
+    const pass3Code = await this.removeUnusedPrivateMethods(pass2Code);
     await this.saveTrimmedFile(pass3Code, 3);
 
-    // PASS 4: Remove unused private methods
-    console.log(chalk.blue('\n📍 Pass 4: Removing unused private methods'));
-    const pass4Code = await this.removeUnusedPrivateMethods(pass3Code);
+    // PASS 4: Remove unused variables, functions, and write-only variables (recursively until fixed point)
+    console.log(chalk.blue('\n📍 Pass 4: Removing unused variables, functions, and write-only variables (recursive)'));
+    const pass4Code = await this.removeUnusedAndWriteOnlyVariables(pass3Code);
     await this.saveTrimmedFile(pass4Code, 4);
 
-    // PASS 5: Remove unused variables and functions (recursively until fixed point)
-    console.log(chalk.blue('\n📍 Pass 5: Removing unused variables and functions (recursive)'));
-    let pass5Code = pass4Code;
-    let iteration = 0;
-    let previousRemovedCount = -1;
-
-    while (true) {
-      iteration++;
-      const result = await this.removeUnusedVariablesAndFunctions(pass5Code, iteration);
-      pass5Code = result.code;
-
-      console.log(chalk.gray(`  Iteration ${iteration}: Removed ${result.removedCount} declarations`));
-
-      // Stop when no more removals occur (fixed point reached)
-      if (result.removedCount === 0) {
-        console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
-        break;
-      }
-
-      // Safety check to prevent infinite loops
-      if (iteration > 10) {
-        console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
-        break;
-      }
-
-      previousRemovedCount = result.removedCount;
-    }
-
+    // PASS 5: Remove all comments
+    console.log(chalk.blue('\n📍 Pass 5: Removing all comments'));
+    const pass5Code = await this.removeAllComments(pass4Code);
     await this.saveTrimmedFile(pass5Code, 5);
 
-    // PASS 6: Remove all comments
-    console.log(chalk.blue('\n📍 Pass 6: Removing all comments'));
-    const pass6Code = await this.removeAllComments(pass5Code);
-    await this.saveTrimmedFile(pass6Code, 6);
-
-    // PASS 7: Remove unused constructor functions and standalone functions (recursive)
-    console.log(chalk.blue('\n📍 Pass 7: Removing unused constructor functions (recursive)'));
-    let pass7Code = pass6Code;
-    iteration = 0;
+    // PASS 6: Remove unused constructor functions and standalone functions (recursive)
+    console.log(chalk.blue('\n📍 Pass 6: Removing unused constructor functions (recursive)'));
+    let pass6Code = pass5Code;
+    let iteration = 0;
 
     while (true) {
       iteration++;
-      const result = await this.removeUnusedConstructors(pass7Code, iteration);
-      pass7Code = result.code;
+      const result = await this.removeUnusedConstructors(pass6Code, iteration);
+      pass6Code = result.code;
 
       console.log(chalk.gray(`  Iteration ${iteration}: Removed ${result.removedCount} items`));
 
@@ -153,34 +122,12 @@ class MixpanelTrimmer {
       }
     }
 
+    await this.saveTrimmedFile(pass6Code, 6);
+
+    // PASS 7: Remove unused variables, functions, and write-only variables again (recursive cleanup after Pass 6)
+    console.log(chalk.blue('\n📍 Pass 7: Removing unused variables, functions, and write-only variables (recursive cleanup)'));
+    const pass7Code = await this.removeUnusedAndWriteOnlyVariables(pass6Code);
     await this.saveTrimmedFile(pass7Code, 7);
-
-    // PASS 8: Remove unused variables and functions again (recursive cleanup after Pass 7)
-    console.log(chalk.blue('\n📍 Pass 8: Removing unused variables and functions (recursive cleanup)'));
-    let pass8Code = pass7Code;
-    iteration = 0;
-
-    while (true) {
-      iteration++;
-      const result = await this.removeUnusedVariablesAndFunctions(pass8Code, iteration);
-      pass8Code = result.code;
-
-      console.log(chalk.gray(`  Iteration ${iteration}: Removed ${result.removedCount} declarations`));
-
-      // Stop when no more removals occur (fixed point reached)
-      if (result.removedCount === 0) {
-        console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
-        break;
-      }
-
-      // Safety check to prevent infinite loops
-      if (iteration > 10) {
-        console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
-        break;
-      }
-    }
-
-    await this.saveTrimmedFile(pass8Code, 8);
 
     // Generate summary
     this.printSummary();
@@ -899,6 +846,35 @@ class MixpanelTrimmer {
       console.log(chalk.red('Error removing unused variables and functions:'), error.message);
       throw error;
     }
+  }
+
+  async removeUnusedAndWriteOnlyVariables(code) {
+    let resultCode = code;
+    let iteration = 0;
+
+    while (true) {
+      iteration++;
+      const unusedResult = await this.removeUnusedVariablesAndFunctions(resultCode, iteration);
+      const writeOnlyResult = await this.removeWriteOnlyVariables(unusedResult.code, iteration);
+      resultCode = writeOnlyResult.code;
+
+      const totalRemoved = unusedResult.removedCount + writeOnlyResult.removedCount;
+      console.log(chalk.gray(`  Iteration ${iteration}: Removed ${unusedResult.removedCount} unused + ${writeOnlyResult.removedCount} write-only = ${totalRemoved} total`));
+
+      // Stop when no more removals occur (fixed point reached)
+      if (totalRemoved === 0) {
+        console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
+        break;
+      }
+
+      // Safety check to prevent infinite loops
+      if (iteration > 10) {
+        console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
+        break;
+      }
+    }
+
+    return resultCode;
   }
 
   async removeAllComments(code) {
@@ -1973,6 +1949,170 @@ class MixpanelTrimmer {
     }
   }
 
+  async removeWriteOnlyVariables(code, iteration = 1) {
+    try {
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      // Step 1: Find all top-level variable declarations
+      const variables = new Map(); // Map<name, { path, varDeclarationPath, isWritten, isRead }>
+
+      traverse(ast, {
+        VariableDeclarator: (path) => {
+          const varDeclaration = path.findParent((p) => p.isVariableDeclaration());
+          if (varDeclaration && varDeclaration.parent.type === 'Program') {
+            const name = path.node.id?.name;
+            if (name) {
+              variables.set(name, {
+                path: path,
+                varDeclarationPath: varDeclaration,
+                isWritten: false,
+                isRead: false,
+                name: name
+              });
+            }
+          }
+        }
+      });
+
+      if (this.options.verbose || iteration === 1) {
+        console.log(chalk.gray(`    Checking ${variables.size} top-level variables for write-only pattern`));
+      }
+
+      // Step 2: Analyze usage patterns
+      traverse(ast, {
+        Identifier: (path) => {
+          const name = path.node.name;
+
+          if (variables.has(name)) {
+            const varInfo = variables.get(name);
+
+            // Skip the declaration itself
+            if (path === varInfo.path.get('id')) {
+              return;
+            }
+
+            // Check if this identifier has a binding to our variable
+            const binding = path.scope.getBinding(name);
+            if (!binding || binding.path !== varInfo.path) {
+              return; // Not our variable
+            }
+
+            // Check if this is on the LEFT side of a member expression assignment
+            // Example: CONFIG_DEFAULTS$1[key] = value
+            const parent = path.parent;
+            if (parent.type === 'MemberExpression' && parent.object === path.node) {
+              // This variable is the object in a member expression
+              const grandParent = path.parentPath.parent;
+
+              if (grandParent?.type === 'AssignmentExpression' && grandParent.left === parent) {
+                // This is: variable[key] = value (write operation)
+                varInfo.isWritten = true;
+              } else {
+                // This is a read operation: x = variable[key] or variable[key].method()
+                varInfo.isRead = true;
+              }
+            } else if (parent.type === 'AssignmentExpression' && parent.left === path.node) {
+              // This is: variable = value (write operation)
+              varInfo.isWritten = true;
+            } else {
+              // Any other usage is a read operation
+              varInfo.isRead = true;
+            }
+          }
+        }
+      });
+
+      // Step 3: Find variables that are only written to, never read
+      const writeOnlyVariables = new Set();
+      const nodesToRemove = [];
+
+      for (const [name, varInfo] of variables.entries()) {
+        if (varInfo.isWritten && !varInfo.isRead) {
+          writeOnlyVariables.add(name);
+
+          // Remove the variable declaration
+          const varDecl = varInfo.varDeclarationPath;
+          if (varDecl.node.declarations.length === 1) {
+            nodesToRemove.push(varDecl);
+          } else {
+            nodesToRemove.push(varInfo.path);
+          }
+
+          if (this.options.verbose) {
+            console.log(chalk.gray(`    Found write-only variable: ${name}`));
+          }
+        }
+      }
+
+      if (this.options.verbose || iteration === 1) {
+        console.log(chalk.gray(`    Found ${writeOnlyVariables.size} write-only variables`));
+      }
+
+      // Step 4: Remove all property assignments to these write-only variables
+      // Example: CONFIG_DEFAULTS$1[CONFIG_ALLOW_SELECTORS] = [];
+      traverse(ast, {
+        ExpressionStatement: (path) => {
+          const expr = path.node.expression;
+
+          // Check for: variable[key] = value
+          if (expr?.type === 'AssignmentExpression' &&
+              expr.left?.type === 'MemberExpression' &&
+              expr.left.object?.type === 'Identifier') {
+
+            const varName = expr.left.object.name;
+            if (writeOnlyVariables.has(varName)) {
+              if (!nodesToRemove.includes(path)) {
+                nodesToRemove.push(path);
+                if (this.options.verbose) {
+                  console.log(chalk.gray(`    Removing property assignment: ${varName}[...] = ...`));
+                }
+              }
+            }
+          }
+        }
+      });
+
+      // Remove collected nodes
+      nodesToRemove.forEach(path => {
+        try {
+          if (path && path.node) {
+            path.remove();
+          }
+        } catch (err) {
+          if (this.options.verbose) {
+            console.log(chalk.yellow(`Warning: Could not remove node: ${err.message}`));
+          }
+        }
+      });
+
+      // Generate code
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: () => true,
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return {
+        code: output.code,
+        removedCount: writeOnlyVariables.size
+      };
+    } catch (error) {
+      console.log(chalk.red('Error removing write-only variables:'), error.message);
+      throw error;
+    }
+  }
+
   async saveTrimmedFile(code, pass = 1) {
     if (this.options.dryRun) {
       console.log(chalk.yellow('\n🔍 DRY RUN MODE - No files will be modified'));
@@ -2034,15 +2174,23 @@ class MixpanelTrimmer {
   printSummary() {
     const reduction = ((this.originalSize - this.trimmedSize) / this.originalSize * 100).toFixed(2);
 
+    // Calculate lines removed
+    const originalPath = this.options.inputFile.replace(/\.cjs\.js$/, '-prettified.cjs.js');
+    const trimmedPath = this.options.outputFile.replace(/\.cjs\.js$/, '-7.cjs.js');
+
+    let linesRemoved = 0;
+    if (fs.existsSync(originalPath) && fs.existsSync(trimmedPath)) {
+      const originalLines = fs.readFileSync(originalPath, 'utf-8').split('\n').length;
+      const trimmedLines = fs.readFileSync(trimmedPath, 'utf-8').split('\n').length;
+      linesRemoved = originalLines - trimmedLines;
+    }
+
     console.log(chalk.blue('\n📊 Trimming Summary:'));
     console.log(`  • Original size: ${this.formatSize(this.originalSize)}`);
     console.log(`  • Trimmed size: ${this.formatSize(this.trimmedSize)}`);
     console.log(`  • Size reduction: ${reduction}% (${this.formatSize(this.originalSize - this.trimmedSize)})`);
     console.log(`  • Methods removed: ${this.removedMethods.size}`);
-    console.log(`  • Prototype aliases removed: ${this.removedPrototypeAliases.size}`);
-    console.log(`  • Export statements removed: ${this.removedExports.size}`);
-    console.log(`  • Methods kept: ${this.usedMethods.size}`);
-    console.log(`  • Lines removed: ~${this.removedLines}`);
+    console.log(`  • Lines removed: ~${linesRemoved}`);
 
     if (this.options.dryRun) {
       console.log(chalk.yellow('\n⚠️  This was a dry run - no files were modified'));
@@ -2052,13 +2200,6 @@ class MixpanelTrimmer {
     if (this.removedMethods.size > 0 && this.options.verbose) {
       console.log(chalk.gray('\nRemoved methods:'));
       Array.from(this.removedMethods).sort().forEach(method => {
-        console.log(chalk.gray(`  - ${method}`));
-      });
-    }
-
-    if (this.removedPrototypeAliases.size > 0 && this.options.verbose) {
-      console.log(chalk.gray('\nRemoved prototype aliases:'));
-      Array.from(this.removedPrototypeAliases).sort().forEach(method => {
         console.log(chalk.gray(`  - ${method}`));
       });
     }

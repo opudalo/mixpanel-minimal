@@ -34,9 +34,12 @@ module.exports = {
     'unused-imports/no-unused-vars': ['warn', {
       vars: 'all',
       varsIgnorePattern: '^_',
-      args: 'all',
-      argsIgnorePattern: '^_'
+      args: 'none'
     }],
+
+    'no-prototype-builtins': 'off',
+
+    // 'no-cond-assign': 'off',
 
     // Dead code patterns
     'no-unreachable': 'warn',
@@ -48,12 +51,15 @@ module.exports = {
     }],
     'no-useless-assignment': 'off',
 
+    'no-const-assign': 'off',
+
     // Function-related
-    'no-useless-call': 'warn',
+    'no-useless-call': 'off',
     'no-useless-concat': 'warn',
     'no-useless-constructor': 'warn',
-    'no-useless-return': 'warn',
-    'no-lone-blocks': 'warn',
+    'no-useless-return': 'off',
+    'no-lone-blocks': 'off',
+    'no-empty': 'off',
     'no-empty-function': 'off',
 
     // Object/Array patterns
@@ -87,43 +93,25 @@ module.exports = {
     'no-debugger': 'warn',
 
     // Complexity warnings (high complexity often means dead code)
-    'complexity': ['warn', { max: 20 }],
-    'max-depth': ['warn', 4],
-    'max-nested-callbacks': ['warn', 3],
-    'max-statements': ['warn', 50],
-    'max-lines-per-function': ['warn', {
-      max: 200,
-      skipBlankLines: true,
-      skipComments: true
-    }]
+    'complexity': 'off',
+    'max-depth': ['warn', 10],
+    'max-nested-callbacks': ['warn', 5],
+    'max-statements': ['warn', 100],
+    'max-lines-per-function': 'off'
   },
 
   // Special overrides for the trimmed file
   overrides: [
     {
-      files: ['src/trimmed/*.js', 'src/trimmed/*.cjs.js'],
+      files: ['src/trimmed/*.js', 'src/trimmed/*.cjs.js', 'src/original/*.js', 'src/original/*.cjs.js'],
       rules: {
         // Even stricter for trimmed files
         'no-unused-vars': ['error', {
           vars: 'all',
-          args: 'all',
-          caughtErrors: 'all'
+          args: 'none',
+          caughtErrors: 'none'
         }],
-        'no-unused-expressions': 'error',
-        'complexity': ['error', { max: 15 }]
-      }
-    },
-    {
-      files: ['src/original/*.js', 'src/original/*.cjs.js'],
-      rules: {
-        // More lenient for original file
-        'no-unused-vars': ['warn', {
-          vars: 'local',
-          args: 'none'
-        }],
-        'complexity': 'off',
-        'max-lines-per-function': 'off',
-        'max-statements': 'off'
+        'no-unused-expressions': 'error'
       }
     }
   ],

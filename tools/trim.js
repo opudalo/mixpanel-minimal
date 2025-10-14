@@ -64,26 +64,123 @@ class MixpanelTrimmer {
     const prettifiedCode = fs.readFileSync(prettifiedPath, 'utf-8');
     console.log(chalk.gray(`Reading prettified file from disk: ${prettifiedPath}`));
 
-    // PASS 1: Remove methods
-    console.log(chalk.blue('\n📍 Pass 1: Removing methods'));
-    const pass1Code = await this.processCode(prettifiedCode, { removeComments: false, pass: 1 });
+    // PASS 0: Remove unused code from _init and reset methods (explicit, surgical removals first)
+    console.log(chalk.blue('\n📍 Pass 0: Removing unused code from _init and reset methods'));
+    const pass0Code = await this.removeUnusedInitCode(prettifiedCode);
+    await this.saveTrimmedFile(pass0Code, 0);
+
+    // PASS 1: Remove self-assignments, unused assignments, and modernize underscore
+    console.log(chalk.blue('\n📍 Pass 1: Removing redundant self-assignments and modernizing underscore'));
+    let pass1Code = await this.removeSelfAssignments(pass0Code);
+    pass1Code = await this.removeUnusedAssignments(pass1Code);
+    pass1Code = await this.replacePromisePolyfill(pass1Code);
+    pass1Code = await this.modernizeUnderscore(pass1Code);
     await this.saveTrimmedFile(pass1Code, 1);
 
-    // PASS 2: Remove comments before removed methods
-    console.log(chalk.blue('\n📍 Pass 2: Removing comments before removed methods'));
-    // Re-parse the original to detect comments
-    const pass2Code = await this.processCode(prettifiedCode, { removeComments: true, pass: 2 });
+    // PASS 2: Remove methods
+    console.log(chalk.blue('\n📍 Pass 2: Removing methods'));
+    const pass2Code = await this.processCode(pass1Code, { removeComments: false, pass: 2 });
     await this.saveTrimmedFile(pass2Code, 2);
 
-    // PASS 3: Remove unused private methods
-    console.log(chalk.blue('\n📍 Pass 3: Removing unused private methods'));
-    const pass3Code = await this.removeUnusedPrivateMethods(pass2Code);
+    // PASS 3: Remove comments before removed methods
+    console.log(chalk.blue('\n📍 Pass 3: Removing comments before removed methods'));
+    // Re-parse Pass 1 to detect comments (includes _init cleanup)
+    const pass3Code = await this.processCode(pass1Code, { removeComments: true, pass: 3 });
     await this.saveTrimmedFile(pass3Code, 3);
 
-    // PASS 4: Remove unused variables and functions
-    console.log(chalk.blue('\n📍 Pass 4: Removing unused variables and functions'));
-    const pass4Code = await this.removeUnusedVariablesAndFunctions(pass3Code);
+    // PASS 4: Remove unused private methods
+    console.log(chalk.blue('\n📍 Pass 4: Removing unused private methods'));
+    const pass4Code = await this.removeUnusedPrivateMethods(pass3Code);
     await this.saveTrimmedFile(pass4Code, 4);
+
+    // PASS 5: Remove unused variables and functions (recursively until fixed point)
+    console.log(chalk.blue('\n📍 Pass 5: Removing unused variables and functions (recursive)'));
+    let pass5Code = pass4Code;
+    let iteration = 0;
+    let previousRemovedCount = -1;
+
+    while (true) {
+      iteration++;
+      const result = await this.removeUnusedVariablesAndFunctions(pass5Code, iteration);
+      pass5Code = result.code;
+
+      console.log(chalk.gray(`  Iteration ${iteration}: Removed ${result.removedCount} declarations`));
+
+      // Stop when no more removals occur (fixed point reached)
+      if (result.removedCount === 0) {
+        console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
+        break;
+      }
+
+      // Safety check to prevent infinite loops
+      if (iteration > 10) {
+        console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
+        break;
+      }
+
+      previousRemovedCount = result.removedCount;
+    }
+
+    await this.saveTrimmedFile(pass5Code, 5);
+
+    // PASS 6: Remove all comments
+    console.log(chalk.blue('\n📍 Pass 6: Removing all comments'));
+    const pass6Code = await this.removeAllComments(pass5Code);
+    await this.saveTrimmedFile(pass6Code, 6);
+
+    // PASS 7: Remove unused constructor functions and standalone functions (recursive)
+    console.log(chalk.blue('\n📍 Pass 7: Removing unused constructor functions (recursive)'));
+    let pass7Code = pass6Code;
+    iteration = 0;
+
+    while (true) {
+      iteration++;
+      const result = await this.removeUnusedConstructors(pass7Code, iteration);
+      pass7Code = result.code;
+
+      console.log(chalk.gray(`  Iteration ${iteration}: Removed ${result.removedCount} items`));
+
+      // Stop when no more removals occur (fixed point reached)
+      if (result.removedCount === 0) {
+        console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
+        break;
+      }
+
+      // Safety check to prevent infinite loops
+      if (iteration > 10) {
+        console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
+        break;
+      }
+    }
+
+    await this.saveTrimmedFile(pass7Code, 7);
+
+    // PASS 8: Remove unused variables and functions again (recursive cleanup after Pass 7)
+    console.log(chalk.blue('\n📍 Pass 8: Removing unused variables and functions (recursive cleanup)'));
+    let pass8Code = pass7Code;
+    iteration = 0;
+
+    while (true) {
+      iteration++;
+      const result = await this.removeUnusedVariablesAndFunctions(pass8Code, iteration);
+      pass8Code = result.code;
+
+      console.log(chalk.gray(`  Iteration ${iteration}: Removed ${result.removedCount} declarations`));
+
+      // Stop when no more removals occur (fixed point reached)
+      if (result.removedCount === 0) {
+        console.log(chalk.green(`  ✓ Fixed point reached after ${iteration} iteration(s)`));
+        break;
+      }
+
+      // Safety check to prevent infinite loops
+      if (iteration > 10) {
+        console.log(chalk.yellow(`  ⚠️  Stopped after 10 iterations (safety limit)`));
+        break;
+      }
+    }
+
+    await this.saveTrimmedFile(pass8Code, 8);
 
     // Generate summary
     this.printSummary();
@@ -545,7 +642,7 @@ class MixpanelTrimmer {
     }
   }
 
-  async removeUnusedVariablesAndFunctions(code) {
+  async removeUnusedVariablesAndFunctions(code, iteration = 1) {
     try {
       const ast = parser.parse(code, {
         sourceType: 'script',
@@ -598,7 +695,9 @@ class MixpanelTrimmer {
         }
       });
 
-      console.log(chalk.gray(`  Found ${declarations.size} top-level declarations`));
+      if (this.options.verbose || iteration === 1) {
+        console.log(chalk.gray(`    Found ${declarations.size} top-level declarations`));
+      }
 
       // Step 2: Count references to each declaration
       traverse(ast, {
@@ -612,10 +711,29 @@ class MixpanelTrimmer {
             if (path !== decl.path.get('id') &&
                 path.getStatementParent() !== decl.path.getStatementParent()) {
 
+              // Don't count if this identifier is on the LEFT side of an assignment
+              // (e.g., schedulingQueue = ... doesn't count as a use)
+              if (path.parent.type === 'AssignmentExpression' && path.parent.left === path.node) {
+                return; // This is an assignment target, not a use
+              }
+
+              // Don't count if this is a property name in a NON-COMPUTED MemberExpression
+              // (e.g., obj.toString or obj.hasOwnProperty are NOT references to the variable)
+              // BUT obj[CONFIG_VAR] IS a reference because it's computed (bracket notation)
+              if (path.parent.type === 'MemberExpression' &&
+                  path.parent.property === path.node &&
+                  !path.parent.computed) {
+                return; // This is a property name in dot notation, not a variable reference
+              }
+
               // Check if this is a binding (declaration) or reference (usage)
               const binding = path.scope.getBinding(name);
-              if (binding && binding.path !== decl.path) {
-                // This is a reference to a different binding (shadowed variable)
+
+              // If there's no binding, this might be a property name (e.g., .toString in obj.toString())
+              // Only count if the binding exists AND points to our declaration
+              if (!binding || binding.path !== decl.path) {
+                // No binding = property name or other non-reference
+                // Wrong binding = shadowed variable
                 return;
               }
 
@@ -633,6 +751,15 @@ class MixpanelTrimmer {
               }
 
               decl.references++;
+            } else if (path.getStatementParent() === decl.path.getStatementParent()) {
+              // Special case: This reference is in the same statement as the declaration
+              // Check if it's in a sibling declarator's initializer (like ArrayProto used by slice)
+              const parentDeclarator = path.findParent((p) => p.isVariableDeclarator());
+              if (parentDeclarator && parentDeclarator !== decl.path) {
+                // This is a reference from a sibling declarator in the same var statement
+                // Count it as a real reference to track dependencies
+                decl.references++;
+              }
             }
           }
         },
@@ -641,7 +768,12 @@ class MixpanelTrimmer {
         StringLiteral: (path) => {
           const name = path.node.value;
           if (declarations.has(name)) {
-            declarations.get(name).references++;
+            const decl = declarations.get(name);
+
+            // Don't count string literals in the same statement as the declaration
+            if (path.getStatementParent() !== decl.path.getStatementParent()) {
+              decl.references++;
+            }
           }
         }
       });
@@ -664,17 +796,21 @@ class MixpanelTrimmer {
           continue;
         }
 
-        // Skip names that start with uppercase AND have lowercase letters (PascalCase - likely constructors)
+        // Skip PascalCase names ONLY if they have references (likely used constructors)
         // Examples: MixpanelLib, Config, NpoPromise
-        // But DO check ALL_CAPS constants as they may be unused
-        if (/^[A-Z]/.test(name) && /[a-z]/.test(name)) {
+        // But DO remove unused PascalCase constructors (e.g., RageClickTracker with no prototype methods)
+        // And DO check ALL_CAPS constants as they may be unused
+        if (/^[A-Z]/.test(name) && /[a-z]/.test(name) && decl.references > 0) {
           if (this.options.verbose) {
-            console.log(chalk.gray(`  Keeping (likely constructor): ${name} (${decl.references} refs)`));
+            console.log(chalk.gray(`    Keeping (used constructor): ${name} (${decl.references} refs)`));
           }
           continue;
         }
 
-        if (decl.references === 0) {
+        // Remove only if no references at all
+        const shouldRemove = decl.references === 0;
+
+        if (shouldRemove) {
           unusedDeclarations.add(name);
 
           if (decl.type === 'function') {
@@ -692,15 +828,37 @@ class MixpanelTrimmer {
           }
 
           if (this.options.verbose) {
-            console.log(chalk.gray(`  Removing unused ${decl.type}: ${name}`));
+            console.log(chalk.gray(`    Removing unused ${decl.type}: ${name}`));
           }
         } else if (this.options.verbose) {
-          console.log(chalk.gray(`  Keeping ${name} (${decl.references} references)`));
+          console.log(chalk.gray(`    Keeping ${name} (${decl.references} refs)`));
         }
       }
 
-      console.log(chalk.gray(`  Removing ${unusedDeclarations.size} unused declarations`));
-      console.log(chalk.gray(`  Keeping ${declarations.size - unusedDeclarations.size} used declarations`));
+      // Step 4: Also remove standalone assignment statements to unused variables
+      // e.g., schedulingQueue = function() {...}() when schedulingQueue is unused
+      traverse(ast, {
+        ExpressionStatement: (path) => {
+          const expr = path.node.expression;
+          if (expr?.type === 'AssignmentExpression' &&
+              expr.left?.type === 'Identifier') {
+            const varName = expr.left.name;
+            if (unusedDeclarations.has(varName)) {
+              if (!nodesToRemove.includes(path)) {
+                nodesToRemove.push(path);
+                if (this.options.verbose) {
+                  console.log(chalk.gray(`    Removing assignment statement for unused variable: ${varName}`));
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (this.options.verbose || iteration === 1) {
+        console.log(chalk.gray(`    Removing ${unusedDeclarations.size} unused declarations`));
+        console.log(chalk.gray(`    Keeping ${declarations.size - unusedDeclarations.size} used declarations`));
+      }
 
       // Remove collected nodes
       nodesToRemove.forEach(path => {
@@ -733,9 +891,1084 @@ class MixpanelTrimmer {
         }
       });
 
-      return output.code;
+      return {
+        code: output.code,
+        removedCount: unusedDeclarations.size
+      };
     } catch (error) {
       console.log(chalk.red('Error removing unused variables and functions:'), error.message);
+      throw error;
+    }
+  }
+
+  async removeAllComments(code) {
+    try {
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      console.log(chalk.gray('  Stripping all comments from code...'));
+
+      // Generate code without any comments
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: false, // Don't include any comments
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      console.log(chalk.gray('  All comments removed'));
+      return output.code;
+    } catch (error) {
+      console.log(chalk.red('Error removing comments:'), error.message);
+      throw error;
+    }
+  }
+
+  async removeUnusedConstructors(code, iteration = 1) {
+    try {
+      if (iteration === 1) {
+        console.log(chalk.gray('  Finding unused constructor functions...'));
+      }
+
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      // Step 1: Find all PascalCase function declarations and var assignments
+      const constructors = new Map(); // Map<name, { path, type, hasNew, hasPrototype }>
+
+      traverse(ast, {
+        // Function declarations
+        FunctionDeclaration: (path) => {
+          if (path.parent.type === 'Program') {
+            const name = path.node.id?.name;
+            // Check if it's PascalCase (likely a constructor)
+            if (name && /^[A-Z]/.test(name) && /[a-z]/.test(name)) {
+              constructors.set(name, {
+                path: path,
+                type: 'function',
+                hasNew: false,
+                hasPrototype: false
+              });
+            }
+          }
+        },
+
+        // Var declarations (e.g., var RequestBatcher = function() {...})
+        VariableDeclarator: (path) => {
+          const varDeclaration = path.findParent((p) => p.isVariableDeclaration());
+          if (varDeclaration && varDeclaration.parent.type === 'Program') {
+            const name = path.node.id?.name;
+            const init = path.node.init;
+
+            // Check if it's a function expression and PascalCase
+            if (name && /^[A-Z]/.test(name) && /[a-z]/.test(name) &&
+                (init?.type === 'FunctionExpression' || init?.type === 'ArrowFunctionExpression')) {
+              constructors.set(name, {
+                path: path,
+                varDeclarationPath: varDeclaration,
+                type: 'var-function',
+                hasNew: false,
+                hasPrototype: false
+              });
+            }
+          }
+        }
+      });
+
+      // Step 2: Check for 'new ConstructorName' usage and prototype assignments
+      traverse(ast, {
+        NewExpression: (path) => {
+          const name = path.node.callee?.name;
+          if (name && constructors.has(name)) {
+            constructors.get(name).hasNew = true;
+          }
+        },
+
+        AssignmentExpression: (path) => {
+          // Check for Constructor.prototype.method = ...
+          const left = path.node.left;
+          if (left?.type === 'MemberExpression' &&
+              left.object?.type === 'MemberExpression' &&
+              left.object.property?.name === 'prototype') {
+            const constructorName = left.object.object?.name;
+            if (constructorName && constructors.has(constructorName)) {
+              constructors.get(constructorName).hasPrototype = true;
+            }
+          }
+        }
+      });
+
+      // Step 3: Also find standalone functions that are never called
+      const standaloneFunctions = new Map();
+
+      traverse(ast, {
+        FunctionDeclaration: (path) => {
+          if (path.parent.type === 'Program') {
+            const name = path.node.id?.name;
+            // Check if it's camelCase (not PascalCase, not _private)
+            if (name && /^[a-z]/.test(name) && !name.startsWith('_')) {
+              standaloneFunctions.set(name, {
+                path: path,
+                called: false
+              });
+            }
+          }
+        }
+      });
+
+      // Step 4: Check if standalone functions are called or referenced
+      traverse(ast, {
+        Identifier: (path) => {
+          const name = path.node.name;
+          if (name && standaloneFunctions.has(name)) {
+            const func = standaloneFunctions.get(name);
+
+            // Don't count the function's own declaration
+            if (path !== func.path.get('id')) {
+              // Skip if this is a property name in a NON-COMPUTED MemberExpression (like chain.resolve)
+              // These are NOT references to the top-level function
+              // BUT obj[funcName] IS a reference because it's computed (bracket notation)
+              if (path.parent.type === 'MemberExpression' &&
+                  path.parent.property === path.node &&
+                  !path.parent.computed) {
+                return; // This is just a property name in dot notation, not a function reference
+              }
+
+              // Use Babel's scope binding to check if this identifier actually refers to our function
+              const binding = path.scope.getBinding(name);
+
+              // Only count if the binding points to our top-level function
+              if (binding && binding.path === func.path) {
+                // Check if this identifier is anywhere within the function's own body (including nested functions)
+                // Walk up the tree to find all ancestor functions
+                let current = path;
+                let isWithinOwnFunction = false;
+
+                while (current) {
+                  const parentFunc = current.getFunctionParent();
+                  if (!parentFunc) break;
+
+                  // Check if this parent function is the function we're analyzing
+                  if (parentFunc === func.path) {
+                    isWithinOwnFunction = true;
+                    break;
+                  }
+
+                  // Move up to check next level
+                  current = parentFunc;
+                }
+
+                // Only mark as called if it's NOT within its own function body
+                if (!isWithinOwnFunction) {
+                  func.called = true;
+                }
+              }
+            }
+          }
+        }
+      });
+
+      // Step 5: Remove unused constructors and functions
+      const nodesToRemove = [];
+      let removedCount = 0;
+
+      // Remove constructors never instantiated with 'new' (regardless of prototype methods)
+      for (const [name, info] of constructors.entries()) {
+        if (!info.hasNew) {
+          if (info.type === 'function') {
+            nodesToRemove.push(info.path);
+          } else if (info.type === 'var-function') {
+            // Check if it's the only declarator
+            if (info.varDeclarationPath.node.declarations.length === 1) {
+              nodesToRemove.push(info.varDeclarationPath);
+            } else {
+              nodesToRemove.push(info.path);
+            }
+          }
+          console.log(chalk.gray(`    Removing unused constructor: ${name}`));
+          removedCount++;
+        }
+      }
+
+      // Remove standalone functions never called
+      for (const [name, info] of standaloneFunctions.entries()) {
+        if (!info.called) {
+          nodesToRemove.push(info.path);
+          console.log(chalk.gray(`    Removing unused function: ${name}`));
+          removedCount++;
+        }
+      }
+
+      // Step 6: Also remove any prototype methods for removed constructors
+      const removedConstructorNames = new Set();
+      for (const [name, info] of constructors.entries()) {
+        if (!info.hasNew) {
+          removedConstructorNames.add(name);
+        }
+      }
+
+      if (removedConstructorNames.size > 0) {
+        traverse(ast, {
+          ExpressionStatement: (path) => {
+            const expr = path.node.expression;
+
+            // Remove prototype method assignments: Constructor.prototype.method = ...
+            if (expr?.type === 'AssignmentExpression' &&
+                expr.left?.type === 'MemberExpression' &&
+                expr.left.object?.type === 'MemberExpression' &&
+                expr.left.object.property?.name === 'prototype') {
+              const constructorName = expr.left.object.object?.name;
+              if (constructorName && removedConstructorNames.has(constructorName)) {
+                if (!nodesToRemove.includes(path)) {
+                  nodesToRemove.push(path);
+                  const methodName = expr.left.property?.name || expr.left.property?.value;
+                  console.log(chalk.gray(`    Removing orphaned prototype method: ${constructorName}.prototype.${methodName}`));
+                  removedCount++;
+                }
+              }
+            }
+
+            // Remove safewrapClass(Constructor) calls
+            if (expr?.type === 'CallExpression' &&
+                expr.callee?.name === 'safewrapClass' &&
+                expr.arguments?.length === 1) {
+              const argName = expr.arguments[0]?.name;
+              if (argName && removedConstructorNames.has(argName)) {
+                if (!nodesToRemove.includes(path)) {
+                  nodesToRemove.push(path);
+                  console.log(chalk.gray(`    Removing safewrapClass call: safewrapClass(${argName})`));
+                  removedCount++;
+                }
+              }
+            }
+
+            // Remove _.inherit(Child, Parent) calls where either is removed
+            if (expr?.type === 'CallExpression' &&
+                expr.callee?.type === 'MemberExpression' &&
+                expr.callee.object?.name === '_' &&
+                expr.callee.property?.name === 'inherit' &&
+                expr.arguments?.length === 2) {
+              const child = expr.arguments[0]?.name;
+              const parent = expr.arguments[1]?.name;
+              if ((child && removedConstructorNames.has(child)) ||
+                  (parent && removedConstructorNames.has(parent))) {
+                if (!nodesToRemove.includes(path)) {
+                  nodesToRemove.push(path);
+                  console.log(chalk.gray(`    Removing inherit call: _.inherit(${child}, ${parent})`));
+                  removedCount++;
+                }
+              }
+            }
+
+            // Remove _.extend(Constructor.prototype, ...) calls
+            if (expr?.type === 'CallExpression' &&
+                expr.callee?.type === 'MemberExpression' &&
+                expr.callee.object?.name === '_' &&
+                expr.callee.property?.name === 'extend' &&
+                expr.arguments?.length >= 1) {
+              const firstArg = expr.arguments[0];
+              // Check if first argument is Constructor.prototype
+              if (firstArg?.type === 'MemberExpression' &&
+                  firstArg.property?.name === 'prototype') {
+                const constructorName = firstArg.object?.name;
+                if (constructorName && removedConstructorNames.has(constructorName)) {
+                  if (!nodesToRemove.includes(path)) {
+                    nodesToRemove.push(path);
+                    console.log(chalk.gray(`    Removing extend call: _.extend(${constructorName}.prototype, ...)`));
+                    removedCount++;
+                  }
+                }
+              }
+            }
+          }
+        });
+      }
+
+      if (iteration === 1 || this.options.verbose) {
+        console.log(chalk.gray(`  Removed ${removedCount} unused constructors/functions`));
+      }
+
+      // Remove collected nodes
+      nodesToRemove.forEach(path => {
+        try {
+          if (path && path.node) {
+            path.remove();
+          }
+        } catch (err) {
+          if (this.options.verbose) {
+            console.log(chalk.yellow(`Warning: Could not remove node: ${err.message}`));
+          }
+        }
+      });
+
+      // Generate code
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: false, // Keep comments stripped
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return {
+        code: output.code,
+        removedCount: removedCount
+      };
+    } catch (error) {
+      console.log(chalk.red('Error removing unused constructors:'), error.message);
+      throw error;
+    }
+  }
+
+  async removeSelfAssignments(code) {
+    try {
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      const nodesToRemove = [];
+      let removedCount = 0;
+
+      traverse(ast, {
+        AssignmentExpression: (path) => {
+          const left = path.node.left;
+          const right = path.node.right;
+
+          // Check for patterns like _['info'] = _.info or _['JSONEncode'] = _.JSONEncode
+          if (left?.type === 'MemberExpression' && right?.type === 'MemberExpression') {
+            // Get left side: _['info'] or _.info
+            const leftObj = left.object?.name;
+            const leftProp = left.property?.name || left.property?.value;
+
+            // Get right side: _.info
+            const rightObj = right.object?.name;
+            const rightProp = right.property?.name || right.property?.value;
+
+            // Check if it's a self-assignment: same object and same property
+            if (leftObj && rightObj && leftObj === rightObj &&
+                leftProp && rightProp && leftProp === rightProp) {
+
+              const statement = path.getStatementParent();
+              if (statement && !nodesToRemove.includes(statement)) {
+                nodesToRemove.push(statement);
+                removedCount++;
+                if (this.options.verbose) {
+                  console.log(chalk.gray(`  Removing self-assignment: ${leftObj}['${leftProp}'] = ${rightObj}.${rightProp}`));
+                }
+              }
+            }
+
+            // Also check for nested patterns like _['info']['browser'] = _.info.browser
+            if (left.object?.type === 'MemberExpression' && right.object?.type === 'MemberExpression') {
+              const leftBaseObj = left.object.object?.name;
+              const leftBaseProp = left.object.property?.name || left.object.property?.value;
+              const leftNestedProp = left.property?.name || left.property?.value;
+
+              const rightBaseObj = right.object.object?.name;
+              const rightBaseProp = right.object.property?.name || right.object.property?.value;
+              const rightNestedProp = right.property?.name || right.property?.value;
+
+              if (leftBaseObj && rightBaseObj && leftBaseObj === rightBaseObj &&
+                  leftBaseProp && rightBaseProp && leftBaseProp === rightBaseProp &&
+                  leftNestedProp && rightNestedProp && leftNestedProp === rightNestedProp) {
+
+                const statement = path.getStatementParent();
+                if (statement && !nodesToRemove.includes(statement)) {
+                  nodesToRemove.push(statement);
+                  removedCount++;
+                  if (this.options.verbose) {
+                    console.log(chalk.gray(`  Removing nested self-assignment: ${leftBaseObj}['${leftBaseProp}']['${leftNestedProp}']`));
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      console.log(chalk.gray(`  Removed ${removedCount} self-assignments`));
+
+      // Remove collected nodes
+      nodesToRemove.forEach(path => {
+        try {
+          if (path && path.node) {
+            path.remove();
+          }
+        } catch (err) {
+          if (this.options.verbose) {
+            console.log(chalk.yellow(`Warning: Could not remove node: ${err.message}`));
+          }
+        }
+      });
+
+      // Generate code
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: () => true,
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return output.code;
+    } catch (error) {
+      console.log(chalk.red('Error removing self-assignments:'), error.message);
+      throw error;
+    }
+  }
+
+  async removeUnusedAssignments(code) {
+    try {
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      const nodesToRemove = [];
+      let removedCount = 0;
+
+      // List of unused assignments to remove (extensible for future additions)
+      const unusedAssignments = ['NPO', 'NpoPromise', 'PromisePrototype'];
+
+      traverse(ast, {
+        AssignmentExpression: (path) => {
+          const left = path.node.left;
+
+          // Check for assignments to _ object like _['NPO'] = ...
+          if (left?.type === 'MemberExpression' && left.object?.name === '_') {
+            const leftProp = left.property?.name || left.property?.value;
+
+            if (leftProp && unusedAssignments.includes(leftProp)) {
+              const statement = path.getStatementParent();
+              if (statement && !nodesToRemove.includes(statement)) {
+                nodesToRemove.push(statement);
+                removedCount++;
+                if (this.options.verbose) {
+                  console.log(chalk.gray(`  Removing unused assignment: _['${leftProp}']`));
+                }
+              }
+            }
+          }
+        },
+
+        // Also handle variable declarations for NpoPromise, PromisePrototype, etc.
+        VariableDeclarator: (path) => {
+          const name = path.node.id?.name;
+
+          if (name && unusedAssignments.includes(name)) {
+            // Check if this is a top-level declaration or close to top-level
+            const varDeclaration = path.findParent((p) => p.isVariableDeclaration());
+            if (varDeclaration) {
+              // If it's the only declarator, remove the entire statement
+              if (varDeclaration.node.declarations.length === 1) {
+                if (!nodesToRemove.includes(varDeclaration)) {
+                  nodesToRemove.push(varDeclaration);
+                  removedCount++;
+                  if (this.options.verbose) {
+                    console.log(chalk.gray(`  Removing unused variable: ${name}`));
+                  }
+                }
+              } else {
+                // Multiple declarators, just remove this one
+                if (!nodesToRemove.includes(path)) {
+                  nodesToRemove.push(path);
+                  removedCount++;
+                  if (this.options.verbose) {
+                    console.log(chalk.gray(`  Removing unused variable: ${name}`));
+                  }
+                }
+              }
+            }
+          }
+        },
+
+        // Also handle function declarations
+        FunctionDeclaration: (path) => {
+          const name = path.node.id?.name;
+
+          if (name && unusedAssignments.includes(name)) {
+            if (!nodesToRemove.includes(path)) {
+              nodesToRemove.push(path);
+              removedCount++;
+              if (this.options.verbose) {
+                console.log(chalk.gray(`  Removing unused function: ${name}`));
+              }
+            }
+          }
+        }
+      });
+
+      console.log(chalk.gray(`  Removed ${removedCount} unused assignments`));
+
+      // Remove collected nodes
+      nodesToRemove.forEach(path => {
+        try {
+          if (path && path.node) {
+            path.remove();
+          }
+        } catch (err) {
+          if (this.options.verbose) {
+            console.log(chalk.yellow(`Warning: Could not remove node: ${err.message}`));
+          }
+        }
+      });
+
+      // Generate code
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: () => true,
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return output.code;
+    } catch (error) {
+      console.log(chalk.red('Error removing unused assignments:'), error.message);
+      throw error;
+    }
+  }
+
+  async replacePromisePolyfill(code) {
+    try {
+      console.log(chalk.gray('  Replacing Promise polyfill with native Promise...'));
+
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      let replaced = false;
+      const nodesToRemove = [];
+      let npoPromiseRemoved = 0;
+
+      traverse(ast, {
+
+        // Remove PromisePrototype variable and all statements that reference NpoPromise
+        VariableDeclaration: (path) => {
+          // Remove PromisePrototype declaration
+          if (path.node.declarations.some(d => d.id?.name === 'PromisePrototype')) {
+            nodesToRemove.push(path);
+            npoPromiseRemoved++;
+            return;
+          }
+
+          // Note: We don't remove builtInProp, cycle, schedulingQueue, timer here
+          // because they're still used in the code. Pass 4 will remove them naturally
+          // once all NpoPromise-related functions are removed.
+
+          // Look for: var PromisePolyfill;
+          if (path.node.declarations.length === 1) {
+            const decl = path.node.declarations[0];
+            if (decl.id?.name === 'PromisePolyfill' && !decl.init) {
+              // Found the declaration, now look for the if statement right after it
+              const nextSibling = path.getSibling(path.key + 1);
+
+              if (nextSibling && nextSibling.node?.type === 'IfStatement') {
+                const test = nextSibling.node.test;
+
+                // Check if this is the Promise polyfill check
+                if (test?.type === 'LogicalExpression' &&
+                    test.operator === '&&') {
+
+                  // Check if it mentions Promise and native code
+                  const codeStr = generate(nextSibling.node).code;
+                  if (codeStr.includes('Promise') && codeStr.includes('native code')) {
+                    // Replace both the declaration and the if statement with a simple assignment
+                    const newDeclaration = t.variableDeclaration('var', [
+                      t.variableDeclarator(
+                        t.identifier('PromisePolyfill'),
+                        t.identifier('Promise')
+                      )
+                    ]);
+
+                    // Remove the if statement
+                    nextSibling.remove();
+
+                    // Replace the declaration
+                    path.replaceWith(newDeclaration);
+
+                    replaced = true;
+                    console.log(chalk.gray('    Replaced Promise polyfill check with: var PromisePolyfill = Promise'));
+                  }
+                }
+              }
+            }
+          }
+        },
+
+        // Remove all statements that reference NpoPromise (like NpoPromise.prototype = ...)
+        ExpressionStatement: (path) => {
+          const codeStr = generate(path.node).code;
+          if (codeStr.includes('NpoPromise') || codeStr.includes('PromisePrototype')) {
+            nodesToRemove.push(path);
+            npoPromiseRemoved++;
+          }
+        },
+
+        // Remove the builtInProp try-catch block (was used by NpoPromise)
+        TryStatement: (path) => {
+          const codeStr = generate(path.node).code;
+          if (codeStr.includes('builtInProp') && codeStr.includes('Object.defineProperty')) {
+            nodesToRemove.push(path);
+            npoPromiseRemoved++;
+          }
+        }
+      });
+
+      // Remove all collected nodes
+      nodesToRemove.forEach(path => {
+        try {
+          if (path && path.node) {
+            path.remove();
+          }
+        } catch (err) {
+          console.log(chalk.yellow(`Warning: Could not remove node: ${err.message}`));
+        }
+      });
+
+      if (!replaced) {
+        console.log(chalk.yellow('    Warning: Promise polyfill pattern not found'));
+      }
+
+      if (npoPromiseRemoved > 0) {
+        console.log(chalk.gray(`    Removed ${npoPromiseRemoved} NpoPromise-related statements`));
+      }
+
+      // Generate code
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: () => true,
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return output.code;
+    } catch (error) {
+      console.log(chalk.red('Error replacing Promise polyfill:'), error.message);
+      throw error;
+    }
+  }
+
+  async modernizeUnderscore(code) {
+    try {
+      console.log(chalk.gray('  Modernizing underscore utility...'));
+
+      // Read modern _ utility from tools/_.js to get the list of methods we're replacing
+      const modernUnderscorePath = path.join(__dirname, '_.js');
+      const modernUnderscore = fs.readFileSync(modernUnderscorePath, 'utf-8');
+
+      // Extract method names from modern implementation
+      const modernMethods = new Set();
+      // Match both function methods and object properties (like cookie)
+      const methodMatches = modernUnderscore.matchAll(/^\s+(\w+):\s*(?:function|\{)/gm);
+      for (const match of methodMatches) {
+        modernMethods.add(match[1]);
+      }
+
+      // Also add isArray which is assigned directly
+      modernMethods.add('isArray');
+
+      if (this.options.verbose) {
+        console.log(chalk.gray(`    Replacing ${modernMethods.size} methods: ${Array.from(modernMethods).join(', ')}`));
+      }
+
+      // Parse the code to find and remove old method implementations
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      const nodesToRemove = [];
+      const commentsToRemove = new Set();
+      let removedCount = 0;
+
+      traverse(ast, {
+        // Find assignments like _.methodName = function...
+        AssignmentExpression: (path) => {
+          const left = path.node.left;
+
+          if (left?.type === 'MemberExpression' &&
+              left.object?.name === '_' &&
+              left.property?.name) {
+
+            const methodName = left.property.name;
+
+            // Only remove if this is a method we're replacing (not localStorage, sessionStorage, info, etc.)
+            if (modernMethods.has(methodName)) {
+              const statement = path.getStatementParent();
+              if (statement && !nodesToRemove.includes(statement)) {
+                // Track comments to remove
+                if (statement.node.leadingComments) {
+                  statement.node.leadingComments.forEach(comment => {
+                    commentsToRemove.add(comment);
+                  });
+                }
+                nodesToRemove.push(statement);
+                removedCount++;
+                if (this.options.verbose) {
+                  console.log(chalk.gray(`    Removing old _.${methodName} and its comments`));
+                }
+              }
+            }
+          }
+        },
+
+        // Also handle the initial "var _ = { trim: ... }" object
+        VariableDeclarator: (path) => {
+          if (path.node.id?.name === '_' &&
+              path.node.init?.type === 'ObjectExpression') {
+
+            // Remove properties that we're replacing
+            const propsToRemove = [];
+            path.node.init.properties.forEach((prop) => {
+              const propName = prop.key?.name || prop.key?.value;
+              if (propName && modernMethods.has(propName)) {
+                propsToRemove.push(prop);
+                if (this.options.verbose) {
+                  console.log(chalk.gray(`    Removing old _.${propName} from initial object`));
+                }
+              }
+            });
+
+            // Remove the properties
+            path.node.init.properties = path.node.init.properties.filter(
+              prop => !propsToRemove.includes(prop)
+            );
+
+            removedCount += propsToRemove.length;
+          }
+        }
+      });
+
+      console.log(chalk.gray(`    Removed ${removedCount} old method implementations`));
+
+      // Remove collected nodes
+      nodesToRemove.forEach(path => {
+        try {
+          if (path && path.node) {
+            path.remove();
+          }
+        } catch (err) {
+          if (this.options.verbose) {
+            console.log(chalk.yellow(`Warning: Could not remove node: ${err.message}`));
+          }
+        }
+      });
+
+      // Generate code with old methods removed
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: (commentValue) => {
+          // Filter out comments that were attached to removed statements
+          for (const comment of commentsToRemove) {
+            if (comment.value === commentValue) {
+              return false;
+            }
+          }
+          return true;
+        },
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      // Now replace the empty "var _ = {};" with the full modern implementation
+      const codeLines = output.code.split('\n');
+
+      // Find "var _ = " which might be formatted as "var _ = {}" or "var _ = { }"
+      let underscoreLineIdx = codeLines.findIndex(line => /var\s+_\s*=\s*\{/.test(line.trim()));
+
+      if (underscoreLineIdx === -1) {
+        throw new Error('Could not find "var _ = {" declaration');
+      }
+
+      // Find the closing }; of the _ object
+      let underscoreEndIdx = underscoreLineIdx;
+      let braceCount = 0;
+      for (let i = underscoreLineIdx; i < codeLines.length; i++) {
+        const line = codeLines[i];
+        braceCount += (line.match(/\{/g) || []).length;
+        braceCount -= (line.match(/\}/g) || []).length;
+        if (braceCount === 0 && i > underscoreLineIdx) {
+          underscoreEndIdx = i;
+          break;
+        }
+      }
+
+      // Extract the full modern underscore implementation from tools/_.js
+      const modernUnderscoreLines = modernUnderscore.split('\n');
+      // Skip the comment on line 1, keep from "var _ = {" to the end
+      const modernImpl = modernUnderscoreLines.slice(1).join('\n');
+
+      // Replace the old _ declaration with the modern one
+      const newCodeLines = [
+        ...codeLines.slice(0, underscoreLineIdx), // Everything before "var _ = {"
+        modernImpl,                                // Modern implementation
+        ...codeLines.slice(underscoreEndIdx + 1)   // Everything after closing };
+      ];
+
+      const finalCode = newCodeLines.join('\n');
+
+      console.log(chalk.gray(`    Replaced _ declaration with ${modernMethods.size} modern methods`));
+
+      // Parse and regenerate through Babel to ensure consistent formatting
+      console.log(chalk.gray(`    Running through Babel for consistent formatting...`));
+      const finalAst = parser.parse(finalCode, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      const finalOutput = generate(finalAst, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: () => true,
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return finalOutput.code;
+    } catch (error) {
+      console.log(chalk.red('Error modernizing underscore:'), error.message);
+      throw error;
+    }
+  }
+
+  async removeUnusedInitCode(code) {
+    try {
+      console.log(chalk.gray('  Removing unused code from _init and reset methods...'));
+
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      let removedCount = 0;
+
+      traverse(ast, {
+        AssignmentExpression: (path) => {
+          const isInitMethod = path.node.left?.type === 'MemberExpression' &&
+              path.node.left.object?.type === 'MemberExpression' &&
+              path.node.left.object.object?.name === 'MixpanelLib' &&
+              path.node.left.object.property?.name === 'prototype' &&
+              path.node.left.property?.name === '_init';
+
+          const isResetMethod = path.node.left?.type === 'MemberExpression' &&
+              path.node.left.object?.type === 'MemberExpression' &&
+              path.node.left.object.object?.name === 'MixpanelLib' &&
+              path.node.left.object.property?.name === 'prototype' &&
+              path.node.left.property?.name === 'reset';
+
+          // Find MixpanelLib.prototype._init = function() { ... }
+          if (isInitMethod) {
+
+            // Get the function body
+            const funcBody = path.node.right?.body?.body;
+            if (!funcBody || !Array.isArray(funcBody)) {
+              return;
+            }
+
+            const nodesToRemove = [];
+
+            // Traverse through function body statements
+            for (let i = 0; i < funcBody.length; i++) {
+              const statement = funcBody[i];
+
+              // 1. Remove: this._batch_requests = this.get_config('batch_requests');
+              if (statement.type === 'ExpressionStatement' &&
+                  statement.expression?.type === 'AssignmentExpression') {
+                const left = statement.expression.left;
+                if (left?.object?.type === 'ThisExpression' &&
+                    left?.property?.name === '_batch_requests') {
+                  nodesToRemove.push(i);
+                  console.log(chalk.gray('    Removing: this._batch_requests assignment'));
+                  removedCount++;
+                  continue;
+                }
+              }
+
+              // 2. Remove: if (this._batch_requests) { ... }
+              if (statement.type === 'IfStatement' &&
+                  statement.test?.type === 'MemberExpression' &&
+                  statement.test.object?.type === 'ThisExpression' &&
+                  statement.test.property?.name === '_batch_requests') {
+                nodesToRemove.push(i);
+                console.log(chalk.gray('    Removing: if (this._batch_requests) block'));
+                removedCount++;
+                continue;
+              }
+
+              // 3. Remove: this._gdpr_init();
+              if (statement.type === 'ExpressionStatement' &&
+                  statement.expression?.type === 'CallExpression' &&
+                  statement.expression.callee?.type === 'MemberExpression' &&
+                  statement.expression.callee.object?.type === 'ThisExpression' &&
+                  statement.expression.callee.property?.name === '_gdpr_init') {
+                nodesToRemove.push(i);
+                console.log(chalk.gray('    Removing: this._gdpr_init() call'));
+                removedCount++;
+                continue;
+              }
+
+              // 4. Remove flags block: this.flags = new FeatureFlagManager(...)
+              if (statement.type === 'ExpressionStatement' &&
+                  statement.expression?.type === 'AssignmentExpression') {
+                const left = statement.expression.left;
+                const right = statement.expression.right;
+
+                if (left?.object?.type === 'ThisExpression' &&
+                    left?.property?.name === 'flags' &&
+                    right?.type === 'NewExpression' &&
+                    right.callee?.name === 'FeatureFlagManager') {
+                  nodesToRemove.push(i);
+                  console.log(chalk.gray('    Removing: this.flags = new FeatureFlagManager(...)'));
+                  removedCount++;
+                  // Continue removing statements until we hit autocapture.init()
+                  for (let j = i + 1; j < funcBody.length; j++) {
+                    const nextStmt = funcBody[j];
+                    nodesToRemove.push(j);
+                    removedCount++;
+
+                    // Check if this is autocapture.init()
+                    if (nextStmt.type === 'ExpressionStatement' &&
+                        nextStmt.expression?.type === 'CallExpression' &&
+                        nextStmt.expression.callee?.type === 'MemberExpression' &&
+                        nextStmt.expression.callee.object?.type === 'MemberExpression' &&
+                        nextStmt.expression.callee.object.object?.type === 'ThisExpression' &&
+                        nextStmt.expression.callee.object.property?.name === 'autocapture' &&
+                        nextStmt.expression.callee.property?.name === 'init') {
+                      console.log(chalk.gray('    Removed through: this.autocapture.init()'));
+                      i = j; // Skip ahead
+                      break;
+                    }
+                  }
+                  continue;
+                }
+              }
+
+              // 5. Remove: this._check_and_start_session_recording();
+              if (statement.type === 'ExpressionStatement' &&
+                  statement.expression?.type === 'CallExpression' &&
+                  statement.expression.callee?.type === 'MemberExpression' &&
+                  statement.expression.callee.object?.type === 'ThisExpression' &&
+                  statement.expression.callee.property?.name === '_check_and_start_session_recording') {
+                nodesToRemove.push(i);
+                console.log(chalk.gray('    Removing: this._check_and_start_session_recording() call'));
+                removedCount++;
+                continue;
+              }
+            }
+
+            // Remove statements in reverse order to maintain correct indices
+            nodesToRemove.sort((a, b) => b - a).forEach(index => {
+              funcBody.splice(index, 1);
+            });
+          }
+
+          // Find MixpanelLib.prototype.reset = function() { ... }
+          if (isResetMethod) {
+            // Get the function body
+            const funcBody = path.node.right?.body?.body;
+            if (!funcBody || !Array.isArray(funcBody)) {
+              return;
+            }
+
+            const nodesToRemove = [];
+
+            // Traverse through function body statements
+            for (let i = 0; i < funcBody.length; i++) {
+              const statement = funcBody[i];
+
+              // Remove: this.stop_session_recording();
+              // Remove: this._check_and_start_session_recording();
+              if (statement.type === 'ExpressionStatement' &&
+                  statement.expression?.type === 'CallExpression' &&
+                  statement.expression.callee?.type === 'MemberExpression' &&
+                  statement.expression.callee.object?.type === 'ThisExpression' &&
+                  (statement.expression.callee.property?.name === 'stop_session_recording' ||
+                   statement.expression.callee.property?.name === '_check_and_start_session_recording')) {
+                nodesToRemove.push(i);
+                console.log(chalk.gray(`    Removing from reset: this.${statement.expression.callee.property.name}() call`));
+                removedCount++;
+                continue;
+              }
+            }
+
+            // Remove statements in reverse order to maintain correct indices
+            nodesToRemove.sort((a, b) => b - a).forEach(index => {
+              funcBody.splice(index, 1);
+            });
+          }
+        }
+      });
+
+      console.log(chalk.gray(`  Removed ${removedCount} statements from _init and reset methods`));
+
+      // Generate code
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: () => true,
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return output.code;
+    } catch (error) {
+      console.log(chalk.red('Error removing unused init code:'), error.message);
       throw error;
     }
   }

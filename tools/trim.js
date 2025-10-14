@@ -69,34 +69,34 @@ class MixpanelTrimmer {
     const pass0Code = await this.removeUnusedInitCode(prettifiedCode);
     await this.saveTrimmedFile(pass0Code, 0);
 
-    // PASS 1: Remove self-assignments, unused assignments, and modernize underscore
-    console.log(chalk.blue('\n📍 Pass 1: Removing redundant self-assignments and modernizing underscore'));
-    let pass1Code = await this.removeSelfAssignments(pass0Code);
-    pass1Code = await this.removeUnusedAssignments(pass1Code);
-    pass1Code = await this.replacePromisePolyfill(pass1Code);
-    pass1Code = await this.modernizeUnderscore(pass1Code);
+    // PASS 1: Remove all comments early (cleaner code for subsequent passes)
+    console.log(chalk.blue('\n📍 Pass 1: Removing all comments'));
+    const pass1Code = await this.removeAllComments(pass0Code);
     await this.saveTrimmedFile(pass1Code, 1);
 
-    // PASS 2: Remove methods and their comments
-    console.log(chalk.blue('\n📍 Pass 2: Removing methods and their comments'));
-    const pass2Code = await this.processCode(pass1Code, { removeComments: true, pass: 2 });
+    // PASS 2: Remove self-assignments, unused assignments, and modernize underscore
+    console.log(chalk.blue('\n📍 Pass 2: Removing redundant self-assignments and modernizing underscore'));
+    let pass2Code = await this.removeSelfAssignments(pass1Code);
+    pass2Code = await this.removeUnusedAssignments(pass2Code);
+    pass2Code = await this.replacePromisePolyfill(pass2Code);
+    pass2Code = await this.modernizeUnderscore(pass2Code);
     await this.saveTrimmedFile(pass2Code, 2);
 
-    // PASS 3: Remove unused private methods (recursive)
-    console.log(chalk.blue('\n📍 Pass 3: Removing unused private methods (recursive)'));
-    const recursivePass3 = await this.makePassRecursive('Pass 3', this.removeUnusedPrivateMethods.bind(this));
-    const pass3Code = await recursivePass3(pass2Code);
+    // PASS 3: Remove methods (without comment removal since already stripped)
+    console.log(chalk.blue('\n📍 Pass 3: Removing methods'));
+    const pass3Code = await this.processCode(pass2Code, { removeComments: false, pass: 3 });
     await this.saveTrimmedFile(pass3Code, 3);
 
-    // PASS 4: Remove unused variables, functions, and write-only variables (recursive)
-    console.log(chalk.blue('\n📍 Pass 4: Removing unused variables, functions, and write-only variables (recursive)'));
-    const recursivePass4 = await this.makePassRecursive('Pass 4', this.removeUnusedAndWriteOnlyVariablesOnce.bind(this));
+    // PASS 4: Remove unused private methods (recursive)
+    console.log(chalk.blue('\n📍 Pass 4: Removing unused private methods (recursive)'));
+    const recursivePass4 = await this.makePassRecursive('Pass 4', this.removeUnusedPrivateMethods.bind(this));
     const pass4Code = await recursivePass4(pass3Code);
     await this.saveTrimmedFile(pass4Code, 4);
 
-    // PASS 5: Remove all comments
-    console.log(chalk.blue('\n📍 Pass 5: Removing all comments'));
-    const pass5Code = await this.removeAllComments(pass4Code);
+    // PASS 5: Remove unused variables, functions, and write-only variables (recursive)
+    console.log(chalk.blue('\n📍 Pass 5: Removing unused variables, functions, and write-only variables (recursive)'));
+    const recursivePass5 = await this.makePassRecursive('Pass 5', this.removeUnusedAndWriteOnlyVariablesOnce.bind(this));
+    const pass5Code = await recursivePass5(pass4Code);
     await this.saveTrimmedFile(pass5Code, 5);
 
     // PASS 6: Remove unused constructor functions and standalone functions (recursive)
@@ -287,8 +287,7 @@ class MixpanelTrimmer {
   }
 
   async processCode(code, options = {}) {
-    const { removeComments = false, pass = 1 } = options;
-    const commentLinesToRemove = new Set(); // Track comment line numbers to remove
+    const { pass = 1 } = options;
 
     try {
       const ast = parser.parse(code, {
@@ -317,19 +316,8 @@ class MixpanelTrimmer {
                 const fullMethodName = `${className}.prototype.${methodName}`;
 
                 if (this.methodsToRemove.has(fullMethodName)) {
-                const statement = path.getStatementParent();
-                if (statement && !nodesToRemove.includes(statement)) {
-                  // Track leading comments for removal if requested
-                    if (removeComments && statement.node.leadingComments) {
-                      statement.node.leadingComments.forEach(comment => {
-                        // Track by line number and content
-                        commentLinesToRemove.add(`${comment.loc.start.line}-${comment.value}`);
-                      });
-                      if (this.options.verbose) {
-                        console.log(chalk.gray(`  Marking ${statement.node.leadingComments.length} comment(s) for removal before: ${fullMethodName}`));
-                      }
-                    }
-
+                  const statement = path.getStatementParent();
+                  if (statement && !nodesToRemove.includes(statement)) {
                     nodesToRemove.push(statement);
                     this.removedMethods.add(fullMethodName);
                     if (this.options.verbose) {
@@ -410,22 +398,10 @@ class MixpanelTrimmer {
         }
       });
 
-      // Generate code
+      // Generate code (comments already removed in Pass 1)
       const output = generate(ast, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: (commentValue) => {
-          // In Pass 2, filter out comments we marked for removal
-          if (removeComments) {
-            // Check all tracked comment signatures
-            for (const sig of commentLinesToRemove) {
-              if (sig.includes(commentValue)) {
-                return false; // Don't print this comment
-              }
-            }
-          }
-          return true;
-        },
+        comments: false, // Comments already stripped in Pass 1
         compact: false,
         concise: false,
         minified: false,
@@ -541,10 +517,6 @@ class MixpanelTrimmer {
       nodesToRemove.forEach(path => {
         try {
           if (path && path.node) {
-            // Also remove leading comments for cleaner output
-            if (path.node.leadingComments) {
-              path.node.leadingComments = null;
-            }
             path.remove();
           }
         } catch (err) {
@@ -554,11 +526,10 @@ class MixpanelTrimmer {
         }
       });
 
-      // Generate code
+      // Generate code (comments already removed in Pass 1)
       const output = generate(ast, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: () => true,
+        comments: false, // Comments already stripped
         compact: false,
         concise: false,
         minified: false,
@@ -797,10 +768,6 @@ class MixpanelTrimmer {
       nodesToRemove.forEach(path => {
         try {
           if (path && path.node) {
-            // Also remove leading comments for cleaner output
-            if (path.node.leadingComments) {
-              path.node.leadingComments = null;
-            }
             path.remove();
           }
         } catch (err) {
@@ -810,11 +777,10 @@ class MixpanelTrimmer {
         }
       });
 
-      // Generate code
+      // Generate code (comments already removed in Pass 1)
       const output = generate(ast, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: () => true,
+        comments: false, // Comments already stripped
         compact: false,
         concise: false,
         minified: false,
@@ -1290,11 +1256,10 @@ class MixpanelTrimmer {
         }
       });
 
-      // Generate code
+      // Generate code (comments already removed in Pass 1)
       const output = generate(ast, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: () => true,
+        comments: false, // Comments already stripped
         compact: false,
         concise: false,
         minified: false,
@@ -1408,11 +1373,10 @@ class MixpanelTrimmer {
         }
       });
 
-      // Generate code
+      // Generate code (comments already removed in Pass 1)
       const output = generate(ast, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: () => true,
+        comments: false, // Comments already stripped
         compact: false,
         concise: false,
         minified: false,
@@ -1536,11 +1500,10 @@ class MixpanelTrimmer {
         console.log(chalk.gray(`    Removed ${npoPromiseRemoved} NpoPromise-related statements`));
       }
 
-      // Generate code
+      // Generate code (comments already removed in Pass 1)
       const output = generate(ast, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: () => true,
+        comments: false, // Comments already stripped
         compact: false,
         concise: false,
         minified: false,
@@ -1664,19 +1627,10 @@ class MixpanelTrimmer {
         }
       });
 
-      // Generate code with old methods removed
+      // Generate code with old methods removed (comments already removed in Pass 1)
       const output = generate(ast, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: (commentValue) => {
-          // Filter out comments that were attached to removed statements
-          for (const comment of commentsToRemove) {
-            if (comment.value === commentValue) {
-              return false;
-            }
-          }
-          return true;
-        },
+        comments: false, // Comments already stripped
         compact: false,
         concise: false,
         minified: false,
@@ -1735,8 +1689,7 @@ class MixpanelTrimmer {
 
       const finalOutput = generate(finalAst, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: () => true,
+        comments: false, // Comments already stripped
         compact: false,
         concise: false,
         minified: false,
@@ -2085,11 +2038,10 @@ class MixpanelTrimmer {
         }
       });
 
-      // Generate code
+      // Generate code (comments already removed in Pass 1)
       const output = generate(ast, {
         sourceMaps: false,
-        comments: true,
-        shouldPrintComment: () => true,
+        comments: false, // Comments already stripped
         compact: false,
         concise: false,
         minified: false,

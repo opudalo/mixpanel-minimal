@@ -75,6 +75,16 @@ class MixpanelTrimmer {
     const pass2Code = await this.processCode(prettifiedCode, { removeComments: true, pass: 2 });
     await this.saveTrimmedFile(pass2Code, 2);
 
+    // PASS 3: Remove unused private methods
+    console.log(chalk.blue('\n📍 Pass 3: Removing unused private methods'));
+    const pass3Code = await this.removeUnusedPrivateMethods(pass2Code);
+    await this.saveTrimmedFile(pass3Code, 3);
+
+    // PASS 4: Remove unused variables and functions
+    console.log(chalk.blue('\n📍 Pass 4: Removing unused variables and functions'));
+    const pass4Code = await this.removeUnusedVariablesAndFunctions(pass3Code);
+    await this.saveTrimmedFile(pass4Code, 4);
+
     // Generate summary
     this.printSummary();
   }
@@ -398,6 +408,334 @@ class MixpanelTrimmer {
       return output.code;
     } catch (error) {
       console.log(chalk.red('Error processing code:'), error.message);
+      throw error;
+    }
+  }
+
+  async removeUnusedPrivateMethods(code) {
+    try {
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      // Step 1: Find all private method declarations
+      const privateMethods = new Map(); // Map<fullMethodName, { className, methodName, path }>
+      const nodesToRemove = [];
+
+      traverse(ast, {
+        AssignmentExpression: (path) => {
+          if (path.node.left?.type === 'MemberExpression') {
+            const obj = path.node.left.object;
+            const prop = path.node.left.property;
+
+            if (obj?.type === 'MemberExpression' && obj.property?.name === 'prototype') {
+              const className = obj.object?.name;
+              const methodName = prop?.name || prop?.value;
+
+              // Only track private methods (starting with _)
+              if (className && methodName && methodName.startsWith('_')) {
+                const fullMethodName = `${className}.prototype.${methodName}`;
+                privateMethods.set(fullMethodName, {
+                  className,
+                  methodName,
+                  path: path.getStatementParent(),
+                  references: 0
+                });
+              }
+            }
+          }
+        }
+      });
+
+      console.log(chalk.gray(`  Found ${privateMethods.size} private methods`));
+
+      // Step 2: Count references to each private method
+      // We need to search for:
+      // - this._methodName()
+      // - someVar._methodName()
+      // - _.methodName (direct references)
+
+      traverse(ast, {
+        MemberExpression: (path) => {
+          const prop = path.node.property;
+          const methodName = prop?.name || prop?.value;
+
+          if (methodName && typeof methodName === 'string' && methodName.startsWith('_')) {
+            // Check if this matches any of our private methods
+            for (const [fullMethodName, methodInfo] of privateMethods.entries()) {
+              if (methodInfo.methodName === methodName) {
+                // Don't count the declaration itself
+                const statement = path.getStatementParent();
+                if (statement !== methodInfo.path) {
+                  methodInfo.references++;
+                }
+              }
+            }
+          }
+        },
+
+        // Also check for string references (e.g., methods called via bracket notation)
+        StringLiteral: (path) => {
+          const value = path.node.value;
+          if (value && typeof value === 'string' && value.startsWith('_')) {
+            for (const [fullMethodName, methodInfo] of privateMethods.entries()) {
+              if (methodInfo.methodName === value) {
+                methodInfo.references++;
+              }
+            }
+          }
+        }
+      });
+
+      // Step 3: Remove methods with 0 references
+      const unusedPrivateMethods = new Set();
+
+      for (const [fullMethodName, methodInfo] of privateMethods.entries()) {
+        if (methodInfo.references === 0) {
+          unusedPrivateMethods.add(fullMethodName);
+          nodesToRemove.push(methodInfo.path);
+          if (this.options.verbose) {
+            console.log(chalk.gray(`  Removing unused: ${fullMethodName}`));
+          }
+        } else if (this.options.verbose) {
+          console.log(chalk.gray(`  Keeping ${fullMethodName} (${methodInfo.references} references)`));
+        }
+      }
+
+      console.log(chalk.gray(`  Removing ${unusedPrivateMethods.size} unused private methods`));
+      console.log(chalk.gray(`  Keeping ${privateMethods.size - unusedPrivateMethods.size} used private methods`));
+
+      // Remove collected nodes
+      nodesToRemove.forEach(path => {
+        try {
+          if (path && path.node) {
+            // Also remove leading comments for cleaner output
+            if (path.node.leadingComments) {
+              path.node.leadingComments = null;
+            }
+            path.remove();
+          }
+        } catch (err) {
+          if (this.options.verbose) {
+            console.log(chalk.yellow(`Warning: Could not remove node: ${err.message}`));
+          }
+        }
+      });
+
+      // Generate code
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: () => true,
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return output.code;
+    } catch (error) {
+      console.log(chalk.red('Error removing unused private methods:'), error.message);
+      throw error;
+    }
+  }
+
+  async removeUnusedVariablesAndFunctions(code) {
+    try {
+      const ast = parser.parse(code, {
+        sourceType: 'script',
+        plugins: ['jsx', 'typescript'],
+        errorRecovery: true
+      });
+
+      // Step 1: Find all top-level declarations
+      const declarations = new Map(); // Map<name, { type, path, references }>
+      const nodesToRemove = [];
+
+      // Collect all top-level function and variable declarations
+      traverse(ast, {
+        // Top-level function declarations
+        FunctionDeclaration: (path) => {
+          // Only process top-level functions (parent is Program)
+          if (path.parent.type === 'Program') {
+            const name = path.node.id?.name;
+            if (name) {
+              declarations.set(name, {
+                type: 'function',
+                path: path,
+                references: 0,
+                name: name
+              });
+            }
+          }
+        },
+
+        // Variable declarations (var, let, const)
+        VariableDeclarator: (path) => {
+          // Check if this is a top-level variable
+          const varDeclaration = path.findParent((p) => p.isVariableDeclaration());
+          if (varDeclaration && varDeclaration.parent.type === 'Program') {
+            const name = path.node.id?.name;
+            if (name) {
+              // Check if it's a function expression
+              const isFunction = path.node.init?.type === 'FunctionExpression' ||
+                                path.node.init?.type === 'ArrowFunctionExpression';
+
+              declarations.set(name, {
+                type: isFunction ? 'function-var' : 'variable',
+                path: path,
+                varDeclarationPath: varDeclaration,
+                references: 0,
+                name: name
+              });
+            }
+          }
+        }
+      });
+
+      console.log(chalk.gray(`  Found ${declarations.size} top-level declarations`));
+
+      // Step 2: Count references to each declaration
+      traverse(ast, {
+        Identifier: (path) => {
+          const name = path.node.name;
+
+          if (declarations.has(name)) {
+            const decl = declarations.get(name);
+
+            // Don't count the declaration itself
+            if (path !== decl.path.get('id') &&
+                path.getStatementParent() !== decl.path.getStatementParent()) {
+
+              // Check if this is a binding (declaration) or reference (usage)
+              const binding = path.scope.getBinding(name);
+              if (binding && binding.path !== decl.path) {
+                // This is a reference to a different binding (shadowed variable)
+                return;
+              }
+
+              // Don't count if this identifier is in the declaration itself
+              if (decl.type === 'function' && path.getFunctionParent() === decl.path) {
+                return; // Inside the function body
+              }
+
+              if (decl.type === 'function-var' || decl.type === 'variable') {
+                // Check if we're inside the initializer
+                const parentVar = path.findParent((p) => p === decl.path);
+                if (parentVar) {
+                  return; // Inside the variable initializer
+                }
+              }
+
+              decl.references++;
+            }
+          }
+        },
+
+        // Also check for string references
+        StringLiteral: (path) => {
+          const name = path.node.value;
+          if (declarations.has(name)) {
+            declarations.get(name).references++;
+          }
+        }
+      });
+
+      // Step 3: Identify unused declarations (but be conservative)
+      const unusedDeclarations = new Set();
+
+      // Reserved names that should never be removed (common patterns)
+      const reservedNames = new Set([
+        'module', 'exports', 'window', 'document', 'console',
+        'MixpanelLib', 'Mixpanel', 'mixpanel', 'init_type'
+      ]);
+
+      for (const [name, decl] of declarations.entries()) {
+        // Skip reserved names
+        if (reservedNames.has(name)) {
+          if (this.options.verbose) {
+            console.log(chalk.gray(`  Keeping reserved: ${name}`));
+          }
+          continue;
+        }
+
+        // Skip names that start with uppercase AND have lowercase letters (PascalCase - likely constructors)
+        // Examples: MixpanelLib, Config, NpoPromise
+        // But DO check ALL_CAPS constants as they may be unused
+        if (/^[A-Z]/.test(name) && /[a-z]/.test(name)) {
+          if (this.options.verbose) {
+            console.log(chalk.gray(`  Keeping (likely constructor): ${name} (${decl.references} refs)`));
+          }
+          continue;
+        }
+
+        if (decl.references === 0) {
+          unusedDeclarations.add(name);
+
+          if (decl.type === 'function') {
+            nodesToRemove.push(decl.path);
+          } else if (decl.type === 'function-var' || decl.type === 'variable') {
+            // For variables, we need to check if it's the only declarator
+            const varDecl = decl.varDeclarationPath;
+            if (varDecl.node.declarations.length === 1) {
+              // Remove the entire variable declaration
+              nodesToRemove.push(varDecl);
+            } else {
+              // Remove just this declarator
+              nodesToRemove.push(decl.path);
+            }
+          }
+
+          if (this.options.verbose) {
+            console.log(chalk.gray(`  Removing unused ${decl.type}: ${name}`));
+          }
+        } else if (this.options.verbose) {
+          console.log(chalk.gray(`  Keeping ${name} (${decl.references} references)`));
+        }
+      }
+
+      console.log(chalk.gray(`  Removing ${unusedDeclarations.size} unused declarations`));
+      console.log(chalk.gray(`  Keeping ${declarations.size - unusedDeclarations.size} used declarations`));
+
+      // Remove collected nodes
+      nodesToRemove.forEach(path => {
+        try {
+          if (path && path.node) {
+            // Also remove leading comments for cleaner output
+            if (path.node.leadingComments) {
+              path.node.leadingComments = null;
+            }
+            path.remove();
+          }
+        } catch (err) {
+          if (this.options.verbose) {
+            console.log(chalk.yellow(`Warning: Could not remove node: ${err.message}`));
+          }
+        }
+      });
+
+      // Generate code
+      const output = generate(ast, {
+        sourceMaps: false,
+        comments: true,
+        shouldPrintComment: () => true,
+        compact: false,
+        concise: false,
+        minified: false,
+        retainLines: false,
+        jsescOption: {
+          minimal: true
+        }
+      });
+
+      return output.code;
+    } catch (error) {
+      console.log(chalk.red('Error removing unused variables and functions:'), error.message);
       throw error;
     }
   }

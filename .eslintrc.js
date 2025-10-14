@@ -54,7 +54,7 @@ module.exports = {
     'no-useless-constructor': 'warn',
     'no-useless-return': 'warn',
     'no-lone-blocks': 'warn',
-    'no-empty-function': "off",
+    'no-empty-function': 'off',
 
     // Object/Array patterns
     'no-unused-properties': 'off', // This isn't a real rule, but would be nice
@@ -110,7 +110,6 @@ module.exports = {
           caughtErrors: 'all'
         }],
         'no-unused-expressions': 'error',
-        'no-empty-function': 'error',
         'complexity': ['error', { max: 15 }]
       }
     },

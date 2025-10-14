@@ -138,5 +138,6 @@
         "italic": true
       }
     }
-  }
+  },
+  "chatgpt.commentCodeLensEnabled": false
 }

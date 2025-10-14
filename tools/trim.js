@@ -51,14 +51,8 @@ class MixpanelTrimmer {
   async trim() {
     console.log(chalk.blue('✂️  Starting Mixpanel trimming process...'));
 
-    // Load methods to keep
-    await this.loadMethodsToKeep();
-
-    // Parse .d.ts to find all declared methods
-    await this.parseTypeDefinitions();
-
-    // Calculate methods to remove
-    this.calculateMethodsToRemove();
+    // Load trim config (manual method control)
+    await this.loadTrimConfig();
 
     // Read original file
     const originalCode = await this.readOriginalFile();
@@ -85,112 +79,90 @@ class MixpanelTrimmer {
     this.printSummary();
   }
 
-  async loadMethodsToKeep() {
-    if (fs.existsSync(this.options.methodsFile)) {
-      const config = JSON.parse(fs.readFileSync(this.options.methodsFile, 'utf-8'));
+  async loadTrimConfig() {
+    const configFile = './trim-config.json';
 
-      // Add main methods
-      if (config.methods) {
-        config.methods.forEach(method => this.usedMethods.add(method));
+    if (!fs.existsSync(configFile)) {
+      console.log(chalk.red(`❌ ${configFile} not found!`));
+      console.log(chalk.yellow('Run: node tools/extract-methods.js to generate it'));
+      process.exit(1);
+    }
+
+    // Read file and strip comments (// style)
+    let fileContent = fs.readFileSync(configFile, 'utf-8');
+
+    // Strip single-line comments but preserve the content
+    fileContent = fileContent.split('\n').map(line => {
+      // If line contains //, remove everything after it (but keep the line for parsing context)
+      const commentIndex = line.indexOf('//');
+      if (commentIndex !== -1) {
+        return line.substring(0, commentIndex);
       }
+      return line;
+    }).join('\n');
 
-      // Add people methods (these will be properties under 'people' object)
-      if (config.peopleMethods) {
-        config.peopleMethods.forEach(method => {
-          this.usedMethods.add(method);
-          this.usedMethods.add(`people.${method}`);
-        });
-      }
+    const config = JSON.parse(fileContent);
 
-      // Always keep 'people' object itself if we have people methods
-      if (config.peopleMethods && config.peopleMethods.length > 0) {
-        this.usedMethods.add('people');
-      }
-
-      console.log(chalk.gray(`Loaded ${this.usedMethods.size} methods to keep from config`));
-    } else {
-      console.log(chalk.yellow('⚠️  No methods config found. Using default essential methods.'));
-      // Add default essential methods
-      ['init', 'track', 'identify', 'reset'].forEach(m => this.usedMethods.add(m));
+    if (!config.methods) {
+      console.log(chalk.red('❌ Invalid config format'));
+      process.exit(1);
     }
 
-    // Add any additional methods from command line
-    if (this.options.keepMethods && this.options.keepMethods.length > 0) {
-      this.options.keepMethods.forEach(method => this.usedMethods.add(method));
-    }
+    // First, extract all methods from the actual code to know what exists
+    const allMethodsInCode = new Set();
+    const originalCode = fs.readFileSync(this.options.inputFile, 'utf-8');
+    const ast = parser.parse(originalCode, {
+      sourceType: 'script',
+      plugins: ['jsx', 'typescript'],
+      errorRecovery: true
+    });
 
-    if (this.options.verbose) {
-      console.log(chalk.gray('Keeping methods:'), Array.from(this.usedMethods).join(', '));
-    }
-  }
+    traverse(ast, {
+      AssignmentExpression: (path) => {
+        if (path.node.left?.type === 'MemberExpression') {
+          const obj = path.node.left.object;
+          const prop = path.node.left.property;
 
-  async parseTypeDefinitions() {
-    // Find .d.ts file (same name as input file but with .d.ts extension)
-    const dtsFile = this.options.inputFile.replace(/\.cjs\.js$/, '.cjs.d.ts');
+          if (obj?.type === 'MemberExpression' && obj.property?.name === 'prototype') {
+            const className = obj.object?.name;
+            const methodName = prop?.name || prop?.value;
 
-    if (!fs.existsSync(dtsFile)) {
-      console.log(chalk.yellow(`⚠️  No .d.ts file found at: ${dtsFile}`));
-      console.log(chalk.yellow('    Skipping TypeScript-based method detection'));
-      return;
-    }
-
-    console.log(chalk.gray(`Parsing type definitions from: ${dtsFile}`));
-
-    const dtsContent = fs.readFileSync(dtsFile, 'utf-8');
-
-    try {
-      const ast = parser.parse(dtsContent, {
-        sourceType: 'module',
-        plugins: [['typescript', { dts: true }]],
-        errorRecovery: true
-      });
-
-      traverse(ast, {
-        TSInterfaceDeclaration: (path) => {
-          const interfaceName = path.node.id.name;
-
-          // Extract methods from interface Mixpanel and interface People
-          if (interfaceName === 'Mixpanel' || interfaceName === 'People') {
-            if (this.options.verbose) {
-              console.log(chalk.gray(`  Found interface: ${interfaceName}`));
+            if (className && methodName && !methodName.startsWith('_')) {
+              const fullMethodName = `${className}.prototype.${methodName}`;
+              allMethodsInCode.add(fullMethodName);
             }
-
-            path.node.body.body.forEach(member => {
-              if (member.type === 'TSMethodSignature' || member.type === 'TSPropertySignature') {
-                const methodName = member.key?.name || member.key?.value;
-                if (methodName) {
-                  this.declaredMethods.add(methodName);
-
-                  // Also add with interface prefix for People methods
-                  if (interfaceName === 'People') {
-                    this.declaredMethods.add(`people.${methodName}`);
-                  }
-
-                  if (this.options.verbose) {
-                    console.log(chalk.gray(`    - ${methodName}`));
-                  }
-                }
-              }
-            });
           }
         }
-      });
-
-      console.log(chalk.gray(`Found ${this.declaredMethods.size} methods declared in interfaces`));
-    } catch (error) {
-      console.log(chalk.yellow(`⚠️  Error parsing .d.ts file: ${error.message}`));
-    }
-  }
-
-  calculateMethodsToRemove() {
-    // Methods to remove = (declared methods) - (methods to keep)
-    this.declaredMethods.forEach(method => {
-      if (!this.usedMethods.has(method)) {
-        this.methodsToRemove.add(method);
       }
     });
 
-    console.log(chalk.gray(`Calculated ${this.methodsToRemove.size} methods to remove`));
+    // Build methodsToRemove list:
+    // 1. Methods set to false explicitly
+    // 2. Methods that exist in code but are missing from config (commented out)
+    const methodsInConfig = new Set();
+
+    Object.entries(config.methods).forEach(([className, methods]) => {
+      Object.entries(methods).forEach(([methodName, shouldKeep]) => {
+        const fullMethodName = `${className}.prototype.${methodName}`;
+        methodsInConfig.add(fullMethodName);
+
+        if (shouldKeep === false) {
+          this.methodsToRemove.add(fullMethodName);
+        }
+      });
+    });
+
+    // Methods that exist in code but not in config = commented out = remove
+    allMethodsInCode.forEach(fullMethodName => {
+      if (!methodsInConfig.has(fullMethodName)) {
+        this.methodsToRemove.add(fullMethodName);
+      }
+    });
+
+    const totalMethods = allMethodsInCode.size;
+    const keepCount = totalMethods - this.methodsToRemove.size;
+
+    console.log(chalk.gray(`Loaded config: ${keepCount} methods to keep, ${this.methodsToRemove.size} to remove (of ${totalMethods} total)`));
 
     if (this.options.verbose && this.methodsToRemove.size > 0) {
       console.log(chalk.gray('Methods to remove:'));
@@ -289,38 +261,40 @@ class MixpanelTrimmer {
       const nodesToRemove = [];
 
       traverse(ast, {
-        // Remove assignments to MixpanelLib.prototype.methodName
+        // Remove assignments to ClassName.prototype.methodName
         AssignmentExpression: (path) => {
           if (path.node.left?.type === 'MemberExpression') {
-            // Check for patterns like:
-            // MixpanelLib.prototype.track = function() { ... }
-            // _.prototype.track = function() { ... }
             const obj = path.node.left.object;
             const prop = path.node.left.property;
 
             // Check if this is a prototype assignment
             if (obj?.type === 'MemberExpression' &&
                 obj.property?.name === 'prototype') {
+              const className = obj.object?.name;
               const methodName = prop?.name || prop?.value;
 
-              if (methodName && this.methodsToRemove.has(methodName)) {
+              if (className && methodName) {
+                const fullMethodName = `${className}.prototype.${methodName}`;
+
+                if (this.methodsToRemove.has(fullMethodName)) {
                 const statement = path.getStatementParent();
                 if (statement && !nodesToRemove.includes(statement)) {
                   // Track leading comments for removal if requested
-                  if (removeComments && statement.node.leadingComments) {
-                    statement.node.leadingComments.forEach(comment => {
-                      // Track by line number and content
-                      commentLinesToRemove.add(`${comment.loc.start.line}-${comment.value}`);
-                    });
-                    if (this.options.verbose) {
-                      console.log(chalk.gray(`  Marking ${statement.node.leadingComments.length} comment(s) for removal before: ${methodName}`));
+                    if (removeComments && statement.node.leadingComments) {
+                      statement.node.leadingComments.forEach(comment => {
+                        // Track by line number and content
+                        commentLinesToRemove.add(`${comment.loc.start.line}-${comment.value}`);
+                      });
+                      if (this.options.verbose) {
+                        console.log(chalk.gray(`  Marking ${statement.node.leadingComments.length} comment(s) for removal before: ${fullMethodName}`));
+                      }
                     }
-                  }
 
-                  nodesToRemove.push(statement);
-                  this.removedMethods.add(methodName);
-                  if (this.options.verbose) {
-                    console.log(chalk.gray(`  Removing: ${methodName}`));
+                    nodesToRemove.push(statement);
+                    this.removedMethods.add(fullMethodName);
+                    if (this.options.verbose) {
+                      console.log(chalk.gray(`  Removing: ${fullMethodName}`));
+                    }
                   }
                 }
               }

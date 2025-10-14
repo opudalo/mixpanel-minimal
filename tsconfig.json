@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES5",
+    "module": "commonjs",
+    "checkJs": false,
+    "allowJs": false,
+    "noEmit": true
+  },
+  "exclude": [
+    "**/*",
+    "node_modules",
+    "src",
+    "tools",
+    "dist",
+    "*.js",
+    "*.cjs",
+    "*.cjs.js",
+    "**/*.js",
+    "**/*.cjs",
+    "**/*.cjs.js"
+  ],
+  "include": []
+}

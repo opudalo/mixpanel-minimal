@@ -1,0 +1,142 @@
+{
+  "editor.formatOnSave": false,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "never",
+    "source.organizeImports": "never"
+  },
+
+  // ESLint Configuration - Focus on dead code
+  "eslint.validate": [
+    "javascript"
+  ],
+  "eslint.enable": true,
+  "eslint.alwaysShowStatus": true,
+  "eslint.lintTask.enable": true,
+  "eslint.quiet": false,
+
+  // COMPLETELY DISABLE TypeScript for JavaScript files
+  "javascript.validate.enable": false,
+  "typescript.validate.enable": false,
+  "typescript.disableAutomaticTypeAcquisition": true,
+  "js/ts.implicitProjectConfig.checkJs": false,
+  "javascript.suggestionActions.enabled": false,
+  "typescript.suggestionActions.enabled": false,
+  "javascript.preferences.importModuleSpecifier": "non-relative",
+  "typescript.tsserver.useSeparateSyntaxServer": false,
+  "typescript.surveys.enabled": false,
+  "typescript.tsserver.log": "off",
+  "javascript.implicitProjectConfig.checkJs": false,
+  "javascript.implicitProjectConfig.experimentalDecorators": false,
+  "typescript.tsserver.experimental.enableProjectDiagnostics": false,
+
+  // Override for JavaScript files
+  "[javascript]": {
+    "editor.quickSuggestions": {
+      "strings": false,
+      "comments": false,
+      "other": false
+    },
+    "editor.suggest.insertMode": "replace",
+    "editor.wordBasedSuggestions": "off",
+    "editor.suggestOnTriggerCharacters": false
+  },
+
+  // Disable inlay hints to reduce clutter
+  "javascript.inlayHints.functionLikeReturnTypes.enabled": false,
+  "javascript.inlayHints.parameterNames.enabled": "none",
+  "typescript.inlayHints.functionLikeReturnTypes.enabled": false,
+  "typescript.inlayHints.parameterNames.enabled": "none",
+
+  // JavaScript-specific settings for better dead code detection
+  "javascript.preferences.quoteStyle": "single",
+  "javascript.updateImportsOnFileMove.enabled": "never",
+  "javascript.suggest.autoImports": false,
+  "javascript.suggest.includeAutomaticOptionalChainCompletions": false,
+
+  // Files
+  "files.exclude": {
+    "node_modules": true,
+    "dist": true,
+    "coverage": true,
+    ".nyc_output": true,
+    "reports": true
+  },
+
+  // Search
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/reports": true
+  },
+
+  // Editor appearance for large files
+  "editor.wordWrap": "off",
+  // "editor.minimap.enabled": true,
+  "editor.folding": true,
+  "editor.foldingStrategy": "indentation",
+  "editor.showFoldingControls": "always",
+  "editor.showUnused": true,
+  "editor.foldingHighlight": true,
+
+  // Performance for large files
+  "editor.largeFileOptimizations": false,
+
+  // Outline and breadcrumbs for navigation
+  "outline.showFunctions": true,
+  "outline.showVariables": true,
+  "outline.showConstants": true,
+  "outline.showArrays": true,
+  "outline.showObjects": true,
+  "breadcrumbs.enabled": true,
+  "outline.icons": true,
+  "outline.problems.enabled": true,
+
+  // Problem highlighting - ENHANCED
+  "problems.decorations.enabled": true,
+  "problems.autoReveal": true,
+  "problems.showCurrentInStatus": true,
+
+  // Color customizations for unused code - MORE VISIBLE
+  "workbench.colorCustomizations": {
+    "editorUnnecessaryCode.border": "#ff0000",
+    "editorUnnecessaryCode.opacity": "#000000AA",
+    "editorWarning.foreground": "#ff8800",
+    "editorWarning.border": "#ff8800",
+    "list.warningForeground": "#ff8800",
+    "editorGutter.modifiedBackground": "#ff8800",
+    "editorOverviewRuler.warningForeground": "#ff8800"
+  },
+
+  // File associations - treat .cjs.js as plain JavaScript
+  "files.associations": {
+    "*.cjs.js": "javascript",
+    "*.cjs": "javascript",
+    "*.js": "javascript",
+    "*.min.js": "javascript",
+    "mixpanel*.js": "javascript",
+    "**/src/original/*.js": "javascript",
+    "**/src/trimmed/*.js": "javascript"
+  },
+
+  // Specific overrides for mixpanel files
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true
+  },
+
+  // Editor tokens and semantic highlighting
+  "editor.semanticHighlighting.enabled": true,
+  "editor.semanticTokenColorCustomizations": {
+    "enabled": true,
+    "rules": {
+      "*.deprecated": {
+        "strikethrough": true,
+        "foreground": "#808080"
+      },
+      "*.unused": {
+        "foreground": "#808080",
+        "italic": true
+      }
+    }
+  }
+}

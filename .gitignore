@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.min.js
+*.map
+
+# Original mixpanel file (user will add their own)
+src/original/mixpanel.js
+src/original/mixpanel.min.js
+src/original/*-prettified.cjs.js
+
+# Trimmed versions (generated)
+src/trimmed/*
+!src/trimmed/.gitkeep
+
+# Analysis reports
+reports/
+*.html
+stats.json
+
+# IDE
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+
+# Test coverage
+coverage/
+.nyc_output/

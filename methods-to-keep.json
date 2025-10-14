@@ -1,0 +1,25 @@
+{
+  "description": "List of Mixpanel methods to keep in the trimmed version",
+  "methods": [
+    "init",
+    "track",
+    "identify",
+    "reset",
+    "register",
+    "register_once",
+    "unregister",
+    "time_event",
+    "get_config",
+    "set_config",
+    "get_distinct_id",
+    "get_property"
+  ],
+  "peopleMethods": [
+    "set",
+    "set_once",
+    "unset",
+    "increment",
+    "track_charge"
+  ],
+  "notes": "Edit this file to specify exactly which methods you want to keep"
+}

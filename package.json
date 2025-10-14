@@ -1,0 +1,75 @@
+{
+  "name": "mixpanel-minimal",
+  "version": "0.2.0",
+  "description": "Tools to analyze and create minimal builds of Mixpanel SDK by removing unused methods",
+  "main": "dist/index.js",
+  "scripts": {
+    "analyze": "node tools/analyze.js",
+    "analyze:bundle": "webpack-bundle-analyzer dist/stats.json",
+    "find-dead": "node tools/find-dead-code.js",
+    "find-dead:verbose": "node tools/find-dead-code.js --verbose --context",
+    "trim": "node tools/trim.js",
+    "trim:dry": "node tools/trim.js --dry-run --verbose",
+    "build": "rollup -c",
+    "build:webpack": "webpack --mode production --json > dist/stats.json",
+    "lint": "eslint src/**/*.js --ext .js",
+    "lint:unused": "eslint src/**/*.js --ext .js --rule 'no-unused-vars: error'",
+    "lint:trimmed": "eslint src/trimmed/*.js",
+    "test": "jest",
+    "clean": "rm -rf dist trimmed reports",
+    "size": "node tools/size-report.js",
+    "full": "npm run trim && npm run size"
+  },
+  "keywords": [
+    "mixpanel",
+    "optimization",
+    "tree-shaking",
+    "bundle-size",
+    "dead-code-elimination"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/generator": "^7.23.0",
+    "@babel/parser": "^7.23.0",
+    "@babel/plugin-transform-modules-commonjs": "^7.23.0",
+    "@babel/preset-env": "^7.23.0",
+    "@babel/traverse": "^7.23.0",
+    "@babel/types": "^7.23.0",
+    "@rollup/plugin-commonjs": "^25.0.0",
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "@rollup/plugin-terser": "^0.4.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "acorn": "^8.10.0",
+    "acorn-walk": "^8.2.0",
+    "babel-loader": "^9.1.3",
+    "chalk": "^4.1.2",
+    "eslint": "^8.50.0",
+    "eslint-plugin-tree-shaking": "^1.10.0",
+    "eslint-plugin-unused-imports": "^3.0.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.6.2",
+    "rollup": "^4.0.0",
+    "rollup-plugin-visualizer": "^5.9.0",
+    "terser": "^5.20.0",
+    "typescript": "^5.2.0",
+    "webpack": "^5.88.0",
+    "webpack-bundle-analyzer": "^4.9.0",
+    "webpack-cli": "^5.1.0"
+  },
+  "dependencies": {
+    "commander": "^11.0.0",
+    "glob": "^10.3.0",
+    "lodash": "^4.17.21"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/mixpanel-minimal.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/mixpanel-minimal/issues"
+  },
+  "homepage": "https://github.com/yourusername/mixpanel-minimal#readme"
+}

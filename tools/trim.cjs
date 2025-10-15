@@ -1524,8 +1524,8 @@ class MixpanelTrimmer {
     try {
       console.log(chalk.gray('  Modernizing underscore utility...'));
 
-      // Read modern _ utility from tools/_.js to get the list of methods we're replacing
-      const modernUnderscorePath = path.join(__dirname, '_.js');
+      // Read modern _ utility from tools/_.cjs to get the list of methods we're replacing
+      const modernUnderscorePath = path.join(__dirname, '_.cjs');
       const modernUnderscore = fs.readFileSync(modernUnderscorePath, 'utf-8');
 
       // Extract method names from modern implementation

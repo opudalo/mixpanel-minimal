@@ -231,12 +231,12 @@ Use this if you need specific features from the official library or want more co
 npm install
 
 # 2. Configure which methods to keep
-node tools/extract-methods.js
+node tools/extract-methods.cjs
 
 # 3. Edit trim-config.json - set methods to true (keep) or false (remove)
 
 # 4. Run the trimmer
-node tools/trim.js
+node tools/trim.cjs
 
 # Output: src/trimmed/mixpanel-trimmed-7.cjs.js (74 KB)
 ```
@@ -316,7 +316,7 @@ Edit `trim-config.json`:
 ### Command Line Options
 
 ```bash
-node tools/trim.js [options]
+node tools/trim.cjs [options]
 
 Options:
   -i, --input <file>      Input file (default: ./src/original/mixpanel.cjs.js)
@@ -332,16 +332,16 @@ Options:
 
 ```bash
 # Verbose mode (see all decisions)
-node tools/trim.js --verbose
+node tools/trim.cjs --verbose
 
 # Dry run (preview changes)
-node tools/trim.js --dry-run
+node tools/trim.cjs --dry-run
 
 # Custom input/output
-node tools/trim.js -i ./custom.js -o ./output.js
+node tools/trim.cjs -i ./custom.js -o ./output.js
 
 # Keep additional methods
-node tools/trim.js -k "track,identify,register"
+node tools/trim.cjs -k "track,identify,register"
 ```
 
 ### Important Notes
@@ -395,9 +395,9 @@ mixpanel-minimal/
 │   └── minipanel.test.js         # Minipanel tests (27 passing)
 │
 ├── tools/
-│   ├── trim.js                   # Trimmer orchestrator
-│   ├── extract-methods.js        # Generate trim-config.json
-│   ├── _.js                      # Modern utility implementation
+│   ├── trim.cjs                  # Trimmer orchestrator
+│   ├── extract-methods.cjs       # Generate trim-config.json
+│   ├── _.cjs                     # Modern utility implementation
 │   └── debug-*.js                # Debug scripts
 │
 ├── trim-config.json              # Trimmer configuration
@@ -571,10 +571,10 @@ node tools/debug-resolve.js
 node tools/debug-variables.js
 
 # Verbose trimming log
-node tools/trim.js --verbose > log.txt
+node tools/trim.cjs --verbose > log.txt
 
 # Preview changes
-node tools/trim.js --dry-run
+node tools/trim.cjs --dry-run
 ```
 
 ---

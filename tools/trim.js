@@ -1872,6 +1872,77 @@ class MixpanelTrimmer {
               funcBody.splice(index, 1);
             });
           }
+
+          // Find MixpanelLib.prototype.track and replace get_session_recording_properties() call
+          const isTrackMethod = path.node.left?.type === 'MemberExpression' &&
+              path.node.left.object?.type === 'MemberExpression' &&
+              path.node.left.object.object?.name === 'MixpanelLib' &&
+              path.node.left.object.property?.name === 'prototype' &&
+              path.node.left.property?.name === 'track';
+
+          if (isTrackMethod) {
+            // Traverse the entire function body to find the get_session_recording_properties call
+            traverse(path.node.right, {
+              CallExpression(callPath) {
+                // Look for this.get_session_recording_properties()
+                if (callPath.node.callee?.type === 'MemberExpression' &&
+                    callPath.node.callee.object?.type === 'ThisExpression' &&
+                    callPath.node.callee.property?.name === 'get_session_recording_properties') {
+
+                  // Replace the call with an empty object literal: {}
+                  callPath.replaceWith(t.objectExpression([]));
+                  console.log(chalk.gray('    Replacing: this.get_session_recording_properties() with {}'));
+                  removedCount++;
+                }
+              }
+            }, path.scope);
+          }
+
+          // Find MixpanelLib.prototype.identify and remove this.flags.fetchFlags() call
+          const isIdentifyMethod = path.node.left?.type === 'MemberExpression' &&
+              path.node.left.object?.type === 'MemberExpression' &&
+              path.node.left.object.object?.name === 'MixpanelLib' &&
+              path.node.left.object.property?.name === 'prototype' &&
+              path.node.left.property?.name === 'identify';
+
+          if (isIdentifyMethod) {
+            // Get the function body
+            const funcBody = path.node.right?.body?.body;
+            if (funcBody && Array.isArray(funcBody)) {
+              const nodesToRemove = [];
+
+              // Find if (new_distinct_id !== previous_distinct_id) { this.flags.fetchFlags(); }
+              for (let i = 0; i < funcBody.length; i++) {
+                const statement = funcBody[i];
+
+                if (statement.type === 'IfStatement' &&
+                    statement.test?.type === 'BinaryExpression' &&
+                    statement.test.operator === '!==' &&
+                    statement.consequent?.type === 'BlockStatement') {
+
+                  // Check if the block contains this.flags.fetchFlags()
+                  const block = statement.consequent.body;
+                  for (let j = 0; j < block.length; j++) {
+                    const blockStmt = block[j];
+                    if (blockStmt.type === 'ExpressionStatement' &&
+                        blockStmt.expression?.type === 'CallExpression' &&
+                        blockStmt.expression.callee?.type === 'MemberExpression' &&
+                        blockStmt.expression.callee.object?.type === 'MemberExpression' &&
+                        blockStmt.expression.callee.object.object?.type === 'ThisExpression' &&
+                        blockStmt.expression.callee.object.property?.name === 'flags' &&
+                        blockStmt.expression.callee.property?.name === 'fetchFlags') {
+
+                      // Remove just this statement from the block
+                      block.splice(j, 1);
+                      console.log(chalk.gray('    Removing from identify: this.flags.fetchFlags() call'));
+                      removedCount++;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       });
 

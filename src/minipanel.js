@@ -40,6 +40,25 @@ const includes = (str, needle) => str.indexOf(needle) !== -1;
 const extend = (...args) => Object.assign({}, ...args);
 
 /**
+ * Truncate string values in an object to a maximum length
+ * (Mixpanel limits string values to 255 characters)
+ */
+const truncate = (obj, length) => {
+    if (typeof obj === 'string') {
+        return obj.slice(0, length);
+    } else if (Array.isArray(obj)) {
+        return obj.map(val => truncate(val, length));
+    } else if (obj !== null && typeof obj === 'object') {
+        const ret = {};
+        for (const [key, val] of Object.entries(obj)) {
+            ret[key] = truncate(val, length);
+        }
+        return ret;
+    }
+    return obj;
+};
+
+/**
  * Browser detection utilities (from mixpanel-js)
  */
 const browserInfo = {
@@ -431,18 +450,29 @@ function createClient(token, config) {
 
     /**
      * Send request to Mixpanel using fetch
+     * Uses POST to avoid URL length limits
      */
     client._send_request = function(endpoint, data, options, callback) {
         callback = callback || function() {};
 
-        const base64Data = btoa(JSON.stringify(data));
-        const url = `${client.config.api_host}${endpoint}/?data=${encodeURIComponent(base64Data)}`;
+        // Truncate string values to 255 characters (Mixpanel limit)
+        const truncated_data = truncate(data, 255);
+
+        const base64Data = btoa(JSON.stringify(truncated_data));
+        const url = `${client.config.api_host}${endpoint}/`;
+        const body = 'data=' + encodeURIComponent(base64Data);
 
         if (client.config.debug) {
-            console.log('Mixpanel request:', endpoint, data);
+            console.log('Mixpanel request:', endpoint, truncated_data);
         }
 
-        fetch(url, { method: 'GET' })
+        fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: body
+        })
             .then(response => response.text())
             .then(text => {
                 if (text === '1' || text === '"1"') {

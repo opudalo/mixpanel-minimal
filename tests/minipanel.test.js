@@ -93,9 +93,12 @@ describe('Minipanel - Integration Tests', () => {
     it('should track an event with no properties', (done) => {
       mixpanel.track('Test Event', {}, (response) => {
         expect(global.fetch).toHaveBeenCalled();
-        const callUrl = global.fetch.mock.calls[0][0];
+        const callArgs = global.fetch.mock.calls[0];
+        const callUrl = callArgs[0];
+        const callOptions = callArgs[1];
         expect(callUrl).toContain('/track/');
-        expect(callUrl).toContain('data=');
+        expect(callOptions.method).toBe('POST');
+        expect(callOptions.body).toContain('data=');
         done();
       });
     });
@@ -115,10 +118,12 @@ describe('Minipanel - Integration Tests', () => {
 
       mixpanel.track('Page View', {}, (response) => {
         expect(global.fetch).toHaveBeenCalled();
-        const callUrl = global.fetch.mock.calls[0][0];
-        const urlObj = new URL(callUrl);
-        const data = urlObj.searchParams.get('data');
-        const decoded = Buffer.from(data, 'base64').toString();
+        const callArgs = global.fetch.mock.calls[0];
+        const body = callArgs[1].body;
+        // Extract data from body: "data=<encoded>"
+        const dataMatch = body.match(/data=([^&]+)/);
+        const encodedData = decodeURIComponent(dataMatch[1]);
+        const decoded = Buffer.from(encodedData, 'base64').toString();
         expect(decoded).toContain('premium');
         done();
       });
@@ -300,6 +305,39 @@ describe('Minipanel - Integration Tests', () => {
         expect(global.fetch).toHaveBeenCalled();
         const callUrl = global.fetch.mock.calls[global.fetch.mock.calls.length - 1][0];
         expect(callUrl).toContain('/engage/');
+        done();
+      });
+    });
+  });
+
+  describe('Data truncation', () => {
+    it('should truncate string properties to 255 characters', (done) => {
+      const longString = 'a'.repeat(300); // 300 characters
+
+      mixpanel.track('Test Event', { longProp: longString }, (response) => {
+        expect(global.fetch).toHaveBeenCalled();
+        const callArgs = global.fetch.mock.calls[0];
+        const body = callArgs[1].body;
+        const dataMatch = body.match(/data=([^&]+)/);
+        const encodedData = decodeURIComponent(dataMatch[1]);
+        const decoded = Buffer.from(encodedData, 'base64').toString();
+        const parsedData = JSON.parse(decoded);
+
+        // String should be truncated to 255 chars
+        expect(parsedData.properties.longProp.length).toBe(255);
+        expect(parsedData.properties.longProp).toBe('a'.repeat(255));
+        done();
+      });
+    });
+
+    it('should use POST method to avoid URL length limits', (done) => {
+      mixpanel.track('Test Event', {}, (response) => {
+        expect(global.fetch).toHaveBeenCalled();
+        const callArgs = global.fetch.mock.calls[0];
+        const callOptions = callArgs[1];
+
+        expect(callOptions.method).toBe('POST');
+        expect(callOptions.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
         done();
       });
     });

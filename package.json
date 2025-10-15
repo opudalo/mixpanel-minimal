@@ -2,7 +2,8 @@
   "name": "mixpanel-minimal",
   "version": "0.2.0",
   "description": "Tools to analyze and create minimal builds of Mixpanel SDK by removing unused methods",
-  "main": "dist/index.js",
+  "type": "module",
+  "main": "src/minipanel.js",
   "scripts": {
     "analyze": "node tools/analyze.js",
     "analyze:bundle": "webpack-bundle-analyzer dist/stats.json",
@@ -15,7 +16,7 @@
     "lint": "eslint src/**/*.js --ext .js",
     "lint:unused": "eslint src/**/*.js --ext .js --rule 'no-unused-vars: error'",
     "lint:trimmed": "eslint src/trimmed/*.js",
-    "test": "jest",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "clean": "rm -rf dist trimmed reports",
     "size": "node tools/size-report.js",
     "full": "npm run trim && npm run size"

@@ -4,14 +4,23 @@
   "description": "Tools to analyze and create minimal builds of Mixpanel SDK by removing unused methods",
   "type": "module",
   "main": "src/minipanel.js",
+  "types": "src/minipanel.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/minipanel.d.ts",
+      "import": "./src/minipanel.js",
+      "default": "./src/minipanel.js"
+    }
+  },
   "scripts": {
     "analyze": "node tools/analyze.js",
     "analyze:bundle": "webpack-bundle-analyzer dist/stats.json",
     "find-dead": "node tools/find-dead-code.js",
     "find-dead:verbose": "node tools/find-dead-code.js --verbose --context",
-    "trim": "node tools/trim.js",
-    "trim:dry": "node tools/trim.js --dry-run --verbose",
+    "trim": "node tools/trim.cjs",
+    "trim:dry": "node tools/trim.cjs --dry-run --verbose",
     "build": "rollup -c",
+    "build:ts": "tsc --project tsconfig.json",
     "build:webpack": "webpack --mode production --json > dist/stats.json",
     "lint": "eslint src/**/*.js --ext .js",
     "lint:unused": "eslint src/**/*.js --ext .js --rule 'no-unused-vars: error'",

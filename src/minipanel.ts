@@ -16,13 +16,15 @@ export interface MinipanelConfig {
   debug?: boolean
   persistence_name?: string | null
   test?: boolean
+  save_referrer?: boolean
 }
 
 const DEFAULT_CONFIG: Required<MinipanelConfig> = {
   api_host: 'https://api.mixpanel.com',
   debug: false,
   persistence_name: null,
-  test: false
+  test: false,
+  save_referrer: true
 }
 
 export interface Properties {
@@ -37,6 +39,8 @@ export interface EventProperties extends Properties {
   $current_url?: string
   $referrer?: string
   $referring_domain?: string
+  $initial_referrer?: string
+  $initial_referring_domain?: string
   $screen_height?: number
   $screen_width?: number
   mp_lib?: string
@@ -117,6 +121,44 @@ const includes = (str: string, needle: string): boolean =>
   str.indexOf(needle) !== -1
 
 const extend = (...args: any[]): any => Object.assign({}, ...args)
+
+/**
+ * Format a Date object to ISO 8601 format for Mixpanel
+ */
+const formatDate = (d: Date): string => {
+  const pad = (n: number): string => (n < 10 ? '0' + n : n.toString())
+  return (
+    d.getUTCFullYear() +
+    '-' +
+    pad(d.getUTCMonth() + 1) +
+    '-' +
+    pad(d.getUTCDate()) +
+    'T' +
+    pad(d.getUTCHours()) +
+    ':' +
+    pad(d.getUTCMinutes()) +
+    ':' +
+    pad(d.getUTCSeconds())
+  )
+}
+
+/**
+ * Recursively encode Date objects to ISO 8601 strings
+ */
+const encodeDates = (obj: any): any => {
+  if (obj instanceof Date) {
+    return formatDate(obj)
+  } else if (Array.isArray(obj)) {
+    return obj.map((val) => encodeDates(val))
+  } else if (obj !== null && typeof obj === 'object') {
+    const ret: any = {}
+    for (const [key, val] of Object.entries(obj)) {
+      ret[key] = encodeDates(val)
+    }
+    return ret
+  }
+  return obj
+}
 
 /**
  * Truncate string values in an object to a maximum length
@@ -332,6 +374,26 @@ class Persistence {
     this.save()
   }
 
+  update_referrer_info(referrer: string): void {
+    // If referrer doesn't exist, we want to note the fact that it was type-in traffic.
+    this.register_once({
+      $initial_referrer: referrer || '$direct',
+      $initial_referring_domain:
+        browserInfo.referringDomain(referrer) || '$direct'
+    })
+  }
+
+  get_referrer_info(): Properties {
+    const result: Properties = {}
+    if (this.props.$initial_referrer) {
+      result.$initial_referrer = this.props.$initial_referrer
+    }
+    if (this.props.$initial_referring_domain) {
+      result.$initial_referring_domain = this.props.$initial_referring_domain
+    }
+    return result
+  }
+
   clear(): void {
     this.props = {}
     try {
@@ -385,7 +447,10 @@ class People implements MixpanelPeople {
       }
     }
 
-    this.mixpanel._send_request('/engage', data, {}, cb)
+    // Encode dates to ISO 8601 format
+    const date_encoded_data = encodeDates(data)
+
+    this.mixpanel._send_request('/engage', date_encoded_data, {}, cb)
   }
 
   set_once(
@@ -419,7 +484,10 @@ class People implements MixpanelPeople {
       }
     }
 
-    this.mixpanel._send_request('/engage', data, {}, cb)
+    // Encode dates to ISO 8601 format
+    const date_encoded_data = encodeDates(data)
+
+    this.mixpanel._send_request('/engage', date_encoded_data, {}, cb)
   }
 
   unset(prop: string | string[], callback?: MixpanelCallback): void {
@@ -514,6 +582,8 @@ class People implements MixpanelPeople {
     }
 
     props.$amount = amount
+
+    // Handle $time specifically - it needs the full ISO format with milliseconds
     if (props.$time) {
       const time = props.$time
       if (time instanceof Date) {
@@ -527,7 +597,10 @@ class People implements MixpanelPeople {
       $distinct_id: distinct_id
     }
 
-    this.mixpanel._send_request('/engage', data, {}, cb)
+    // Encode remaining dates to ISO 8601 format
+    const date_encoded_data = encodeDates(data)
+
+    this.mixpanel._send_request('/engage', date_encoded_data, {}, cb)
   }
 }
 
@@ -562,6 +635,11 @@ function createClient(
       distinct_id: '$device:' + device_id,
       $device_id: device_id
     })
+  }
+
+  // Track initial referrer if enabled
+  if (client.config.save_referrer) {
+    client.persistence.update_referrer_info(document.referrer)
   }
 
   // Initialize people API
@@ -764,6 +842,15 @@ function createClient(
    */
   client.set_config = function (config: Partial<MinipanelConfig>): void {
     Object.assign(client.config, config)
+  }
+
+  // Set initial referrer on user profile (set_once ensures it's only set on first visit)
+  // This is called after all client methods are defined
+  if (client.config.save_referrer) {
+    const referrer_info = client.persistence.get_referrer_info()
+    if (Object.keys(referrer_info).length > 0) {
+      client.people.set_once(referrer_info)
+    }
   }
 
   return client as MinipanelInstance
